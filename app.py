@@ -344,6 +344,17 @@ st.markdown("""
             background-position: 0% 50%;
         }
     }
+    
+    /* Navigation buttons container */
+    .nav-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 20px;
+        margin-top: 20px;
+        padding-top: 20px;
+        border-top: 1px solid rgba(102, 126, 234, 0.2);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1010,6 +1021,7 @@ def extract_numeric_from_doi(doi: str) -> int:
 def extract_all_authors_and_affiliations(work: dict) -> Tuple[List[str], List[str]]:
     """
     Extract all authors and unique affiliations from authorships.
+    No truncation - returns full lists.
     """
     authors = []
     affiliations = set()
@@ -1078,6 +1090,7 @@ def get_oa_status(work: dict) -> str:
 def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     """
     Enrich article data with complete information including all fields.
+    No truncation of authors or affiliations.
     """
     if not work:
         return {}
@@ -1087,15 +1100,15 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     if doi_raw:
         doi_clean = str(doi_raw).replace('https://doi.org/', '')
     
-    # Extract authors and affiliations
+    # Extract ALL authors and affiliations (no truncation)
     authors, affiliations = extract_all_authors_and_affiliations(work)
-    authors_str = ', '.join(authors[:10]) if authors else 'Authors not specified'
-    if len(authors) > 10:
-        authors_str += f" et al. ({len(authors)} authors total)"
+    authors_str = ', '.join(authors) if authors else 'Authors not specified'
     
-    affiliations_str = '; '.join(affiliations[:5])
-    if len(affiliations) > 5:
-        affiliations_str += f" and {len(affiliations) - 5} more"
+    # Join all affiliations with ● separator
+    if affiliations:
+        affiliations_str = ' ● '.join(affiliations)
+    else:
+        affiliations_str = 'No affiliations specified'
     
     # Extract publication info
     biblio = work.get('biblio', {})
@@ -1113,7 +1126,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     elif last_page:
         pages_str = last_page
     
-    # Get journal and publisher info - FIXED: use host_organization_name
+    # Get journal and publisher info
     journal_name = ''
     publisher = ''
     publisher_chain = []
@@ -1122,15 +1135,11 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         source = primary_location.get('source', {})
         if source:
             journal_name = source.get('display_name', '') or ''
-            # Сначала пробуем получить host_organization_name
             publisher = source.get('host_organization_name', '') or ''
-            # Если нет, пробуем publisher
             if not publisher:
                 publisher = source.get('publisher', '') or ''
-            # Если все еще нет, пробуем host_organization
             if not publisher:
                 publisher = source.get('host_organization', '') or ''
-            # Получаем цепочку издателей
             publisher_chain = source.get('host_organization_lineage_names', [])
     
     # Extract topic info
@@ -1171,7 +1180,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         'affiliations_str': affiliations_str,
         'journal_name': journal_name,
         'publisher': publisher,
-        'publisher_chain': publisher_chain,  # новое поле для цепочки издателей
+        'publisher_chain': publisher_chain,
         'volume': volume,
         'issue': issue,
         'pages': pages_str,
@@ -1188,7 +1197,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
 # HIERARCHICAL GROUPING FUNCTIONS WITH CACHING
 # ============================================================================
 
-@st.cache_data(ttl=3600)  # кэш на 1 час
+@st.cache_data(ttl=3600)
 def cached_group_articles_by_publisher_journal(articles_tuple: tuple) -> Dict[str, Dict[str, List[dict]]]:
     """
     Cached version of group_articles_by_publisher_journal.
@@ -1205,12 +1214,12 @@ def cached_group_articles_by_country_affiliation(articles_tuple: tuple) -> Dict[
     return group_articles_by_country_affiliation(articles)
 
 @st.cache_data(ttl=3600)
-def cached_sort_articles_by_citations(articles_tuple: tuple) -> List[dict]:
+def cached_sort_articles_by_citations(articles_tuple: tuple, sort_by: str = 'citations_per_year') -> List[dict]:
     """
-    Cached version of sort_articles_by_citations.
+    Cached version of sort_articles_by_citations with sort option.
     """
     articles = list(articles_tuple)
-    return sort_articles_by_citations(articles)
+    return sort_articles_by_citations(articles, sort_by)
 
 def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[str, List[dict]]]:
     """
@@ -1221,33 +1230,25 @@ def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[
     
     for article in articles:
         publisher = article.get('publisher', 'Unknown Publisher')
-        # Ensure publisher is not None
         if publisher is None:
             publisher = 'Unknown Publisher'
-        # Если publisher начинается с "https://openalex.org/", то это ID, а не имя
         if isinstance(publisher, str):
-            # Проверяем, является ли publisher ID (начинается с P или содержит openalex.org/P)
             if publisher.startswith('P') and publisher[1:].isdigit() or 'openalex.org/P' in publisher:
-                # Пробуем получить имя из цепочки издателей
                 publisher_chain = article.get('publisher_chain', [])
                 if publisher_chain and len(publisher_chain) > 0:
-                    publisher = publisher_chain[0]  # Берем первое имя из цепочки
+                    publisher = publisher_chain[0]
                 else:
-                    # Если цепочка пуста, оставляем как есть или ставим Unknown
                     publisher = 'Unknown Publisher'
         
         journal = article.get('journal_name', 'Unknown Journal')
-        # Ensure journal is not None
         if journal is None:
             journal = 'Unknown Journal'
         hierarchy[publisher][journal].append(article)
     
-    # Sort alphabetically, handling None values
     sorted_hierarchy = {}
     for publisher in sorted([p for p in hierarchy.keys() if p is not None]):
         sorted_hierarchy[publisher] = {}
         for journal in sorted([j for j in hierarchy[publisher].keys() if j is not None]):
-            # Sort articles within each journal by citations per year (descending)
             sorted_articles = sorted(
                 hierarchy[publisher][journal],
                 key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
@@ -1267,11 +1268,9 @@ def group_articles_by_country_affiliation(articles: List[dict]) -> Dict[str, Dic
     
     for article in articles:
         country = article.get('country', 'Unknown')
-        # Ensure country is not None
         if country is None:
             country = 'Unknown'
         affiliations = article.get('affiliations', ['Unknown Affiliation'])
-        # Filter out None values from affiliations
         if not affiliations:
             affiliations = ['Unknown Affiliation']
         else:
@@ -1282,12 +1281,10 @@ def group_articles_by_country_affiliation(articles: List[dict]) -> Dict[str, Dic
         for aff in affiliations:
             hierarchy[country][aff].append(article)
     
-    # Sort alphabetically, handling None values
     sorted_hierarchy = {}
     for country in sorted([c for c in hierarchy.keys() if c is not None]):
         sorted_hierarchy[country] = {}
         for affiliation in sorted([a for a in hierarchy[country].keys() if a is not None]):
-            # Sort articles within each affiliation by citations per year (descending)
             sorted_articles = sorted(
                 hierarchy[country][affiliation],
                 key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
@@ -1297,15 +1294,251 @@ def group_articles_by_country_affiliation(articles: List[dict]) -> Dict[str, Dic
     
     return sorted_hierarchy
 
-def sort_articles_by_citations(articles: List[dict]) -> List[dict]:
+def sort_articles_by_citations(articles: List[dict], sort_by: str = 'citations_per_year') -> List[dict]:
     """
-    Sort all articles by citations per year (descending).
+    Sort all articles by citations per year or total citations (descending).
     """
-    return sorted(
-        articles,
-        key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
-        reverse=True
-    )
+    if sort_by == 'total_citations':
+        return sorted(
+            articles,
+            key=lambda x: x.get('cited_by_count', 0) if x.get('cited_by_count') is not None else 0,
+            reverse=True
+        )
+    else:  # default: citations_per_year
+        return sorted(
+            articles,
+            key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
+            reverse=True
+        )
+
+def sort_hierarchy_by_article_count(hierarchy: Dict) -> Dict:
+    """
+    Sort hierarchy levels by number of articles (descending).
+    """
+    if not hierarchy:
+        return hierarchy
+    
+    sorted_hierarchy = {}
+    
+    # Sort top-level keys by total article count
+    top_level_items = []
+    for key, value in hierarchy.items():
+        if isinstance(value, dict):
+            total_count = sum(len(articles) for articles in value.values())
+        else:
+            total_count = len(value)
+        top_level_items.append((key, value, total_count))
+    
+    top_level_items.sort(key=lambda x: x[2], reverse=True)
+    
+    for key, value, _ in top_level_items:
+        if isinstance(value, dict):
+            # Sort second-level items
+            second_level_items = []
+            for sub_key, articles in value.items():
+                second_level_items.append((sub_key, articles, len(articles)))
+            second_level_items.sort(key=lambda x: x[2], reverse=True)
+            
+            sorted_hierarchy[key] = {
+                sub_key: articles for sub_key, articles, _ in second_level_items
+            }
+        else:
+            sorted_hierarchy[key] = value
+    
+    return sorted_hierarchy
+
+# ============================================================================
+# SEARCH FUNCTIONS FOR STEP 6
+# ============================================================================
+
+def normalize_for_search(text: str) -> str:
+    """
+    Normalize text for search: lowercase, remove extra spaces.
+    """
+    if not text:
+        return ""
+    text = text.lower().strip()
+    text = re.sub(r'\s+', ' ', text)
+    return text
+
+def check_phrase_match(title: str, phrase: str) -> bool:
+    """
+    Check if exact phrase exists in title (case-insensitive).
+    """
+    if not title or not phrase:
+        return False
+    title_norm = normalize_for_search(title)
+    phrase_norm = normalize_for_search(phrase)
+    return phrase_norm in title_norm
+
+def check_and_match(title: str, terms: List[str]) -> bool:
+    """
+    Check if ALL terms exist in title (AND logic).
+    """
+    if not title or not terms:
+        return False
+    title_norm = normalize_for_search(title)
+    for term in terms:
+        term_norm = normalize_for_search(term)
+        if term_norm not in title_norm:
+            return False
+    return True
+
+def expand_wildcard(term: str) -> str:
+    """
+    Expand wildcard terms by removing trailing * for matching.
+    Example: "catal*" -> "catal"
+    """
+    if not term:
+        return term
+    # Remove trailing * and any following characters
+    term = re.sub(r'\*+$', '', term)
+    return term
+
+def expand_plural(term: str) -> List[str]:
+    """
+    Generate possible plural/singular forms of a term.
+    """
+    if not term:
+        return [term]
+    
+    term_lower = term.lower()
+    variants = [term_lower]
+    
+    # Common pluralization rules
+    if term_lower.endswith('s') and not term_lower.endswith(('ss', 'us', 'is')):
+        singular = term_lower[:-1]
+        if len(singular) >= 3:
+            variants.append(singular)
+    else:
+        # Add plural forms
+        if term_lower.endswith('y'):
+            variants.append(term_lower[:-1] + 'ies')
+        elif term_lower.endswith(('ch', 'sh', 'x', 'z')):
+            variants.append(term_lower + 'es')
+        elif not term_lower.endswith('s'):
+            variants.append(term_lower + 's')
+    
+    return list(set(variants))
+
+def check_term_match(title: str, term: str) -> bool:
+    """
+    Check if a single term matches the title with wildcard and plural support.
+    """
+    if not title or not term:
+        return False
+    
+    title_norm = normalize_for_search(title)
+    
+    # Check for wildcard (catal*)
+    if '*' in term:
+        base = expand_wildcard(term)
+        if base and base in title_norm:
+            return True
+        # Also try to match word prefixes
+        words = title_norm.split()
+        for word in words:
+            if word.startswith(base):
+                return True
+        return False
+    
+    # Check with plural forms
+    variants = expand_plural(term)
+    for variant in variants:
+        if variant in title_norm:
+            return True
+        # Also check as separate word
+        words = title_norm.split()
+        for word in words:
+            if variant == word:
+                return True
+            if word.startswith(variant) and len(word) >= len(variant):
+                # For partial matches like "catalytic" matching "catal"
+                pass
+    
+    return False
+
+def parse_search_query(query: str) -> Dict[str, Any]:
+    """
+    Parse search query and return structured search parameters.
+    Returns: {
+        'phrase': str or None,  # exact phrase in quotes
+        'and_terms': List[str],  # terms with AND logic
+        'or_terms': List[str],   # terms with OR logic (standard)
+        'has_wildcard': bool
+    }
+    """
+    if not query or not query.strip():
+        return {'phrase': None, 'and_terms': [], 'or_terms': [], 'has_wildcard': False}
+    
+    query = query.strip()
+    
+    # Check for quoted phrases
+    phrase_match = re.search(r'"([^"]+)"', query)
+    phrase = phrase_match.group(1) if phrase_match else None
+    
+    # Remove quoted parts
+    remaining = re.sub(r'"[^"]*"', '', query).strip()
+    
+    # Split by spaces for terms
+    terms = remaining.split() if remaining else []
+    
+    # Separate terms that should use AND logic (no special syntax)
+    # All terms without quotes are treated as AND by default
+    and_terms = []
+    or_terms = []
+    has_wildcard = False
+    
+    for term in terms:
+        if '*' in term:
+            has_wildcard = True
+        and_terms.append(term)
+    
+    return {
+        'phrase': phrase,
+        'and_terms': and_terms,
+        'or_terms': or_terms,
+        'has_wildcard': has_wildcard
+    }
+
+def filter_articles_by_query(articles: List[dict], query: str) -> List[dict]:
+    """
+    Filter articles by search query.
+    Supports:
+    - Quoted phrases: "high temperature"
+    - AND logic: high temperature (both words must appear)
+    - Wildcards: catal* (matches catalysis, catalyst, etc.)
+    - Plural forms: fuel cell = fuel cells
+    """
+    if not query or not query.strip() or not articles:
+        return articles
+    
+    parsed = parse_search_query(query)
+    filtered = []
+    
+    for article in articles:
+        title = article.get('title', '')
+        if not title:
+            continue
+        
+        match = True
+        
+        # Check phrase match
+        if parsed['phrase']:
+            if not check_phrase_match(title, parsed['phrase']):
+                match = False
+        
+        # Check AND terms
+        if match and parsed['and_terms']:
+            for term in parsed['and_terms']:
+                if not check_term_match(title, term):
+                    match = False
+                    break
+        
+        if match:
+            filtered.append(article)
+    
+    return filtered
 
 # ============================================================================
 # PDF REPORT GENERATION FUNCTIONS
@@ -1369,7 +1602,6 @@ def clean_text(text):
 def clean_doi_url(url):
     if not url:
         return ""
-    # Экранируем специальные символы для XML
     url = url.replace('&', '&amp;')
     url = url.replace('"', '&quot;')
     url = url.replace("'", '&apos;')
@@ -1396,7 +1628,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     
     styles = getSampleStyleSheet()
     
-    # Define styles
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Normal'],
@@ -1538,13 +1769,11 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     
     story = []
     
-    # Calculate total articles
     total_articles = sum(len(articles) for publisher in hierarchy.values() 
                         for journal in publisher.values() 
                         for articles in [journal])
     total_publishers = len(hierarchy)
     
-    # Cover Page
     story.append(Spacer(1, 2*cm))
     
     if logo_path and os.path.exists(logo_path):
@@ -1604,14 +1833,12 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     story.append(stats_table)
     story.append(PageBreak())
     
-    # Table of Contents
     story.append(Paragraph("Table of Contents", title_style))
     story.append(Spacer(1, 0.5*cm))
         
     for publisher, journals in hierarchy.items():
         publisher_articles = sum(len(articles) for articles in journals.values())
         anchor_id = f"publisher_{hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]}"
-        # Используем <a> для внутренних ссылок (это работает в ReportLab)
         story.append(Paragraph(f'<a href="#{anchor_id}"><b>{clean_text(publisher)}</b> — {publisher_articles} articles</a>', toc_publisher_style))
         
         for journal, articles in journals.items():
@@ -1623,7 +1850,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     
     story.append(PageBreak())
     
-    # Articles by Publisher -> Journal
     for publisher, journals in hierarchy.items():
         publisher_articles = sum(len(articles) for articles in journals.values())
         anchor_id = f"publisher_{hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]}"
@@ -1694,7 +1920,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
         story.append(Spacer(1, 0.3*cm))
         story.append(PageBreak())
     
-    # Conclusion
     story.append(Paragraph("Conclusion", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -1709,7 +1934,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     story.append(Paragraph(conclusion_text, conclusion_style))
     story.append(Spacer(1, 1*cm))
     
-    # App logo at the end
     try:
         possible_paths = [
             "logo.png",
@@ -1767,7 +1991,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     styles = getSampleStyleSheet()
     
-    # Define styles
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Normal'],
@@ -1871,7 +2094,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     total_articles = len(articles)
     
-    # Cover Page
     story.append(Spacer(1, 2*cm))
     
     if logo_path and os.path.exists(logo_path):
@@ -1935,11 +2157,9 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     story.append(stats_table)
     story.append(PageBreak())
     
-    # Table of Contents
     story.append(Paragraph("Table of Contents", title_style))
     story.append(Spacer(1, 0.5*cm))
     
-    # Show top 20 articles in TOC
     for idx, article in enumerate(articles[:20], 1):
         title = clean_text(article.get('title', 'No title')[:60])
         citations = article.get('citations_per_year', 0)
@@ -1953,7 +2173,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     story.append(PageBreak())
     
-    # Articles sorted by citations
     story.append(Paragraph("Articles by Citations per Year", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -1971,6 +2190,11 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         affs = clean_text(article.get('affiliations_str', ''))
         if affs:
             story.append(Paragraph(f"<b>Affiliations:</b> {affs}", meta_style))
+        
+        # ADDED: Journal name
+        journal_name_article = clean_text(article.get('journal_name', ''))
+        if journal_name_article:
+            story.append(Paragraph(f"<b>Journal:</b> {journal_name_article}", meta_style))
         
         year = article.get('publication_year', '')
         volume = article.get('volume', '')
@@ -2012,7 +2236,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     story.append(Spacer(1, 0.3*cm))
     story.append(PageBreak())
     
-    # Conclusion
     story.append(Paragraph("Conclusion", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -2027,7 +2250,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     story.append(Paragraph(conclusion_text, conclusion_style))
     story.append(Spacer(1, 1*cm))
     
-    # App logo at the end
     try:
         possible_paths = [
             "logo.png",
@@ -2085,7 +2307,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     
     styles = getSampleStyleSheet()
     
-    # Define styles
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Normal'],
@@ -2232,7 +2453,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                         for articles in [affiliation])
     total_countries = len(hierarchy)
     
-    # Cover Page
     story.append(Spacer(1, 2*cm))
     
     if logo_path and os.path.exists(logo_path):
@@ -2292,7 +2512,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     story.append(stats_table)
     story.append(PageBreak())
     
-    # Table of Contents
     story.append(Paragraph("Table of Contents", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -2310,7 +2529,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     
     story.append(PageBreak())
     
-    # Articles by Country -> Affiliation
     for country, affiliations in hierarchy.items():
         country_articles = sum(len(articles) for articles in affiliations.values())
         anchor_id = f"country_{hashlib.md5(country.encode('utf-8')).hexdigest()[:8]}"
@@ -2334,6 +2552,11 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 
                 authors = clean_text(article.get('authors', 'Authors not specified'))
                 story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Authors:</b> {authors}", authors_style))
+                
+                # ADDED: Journal name
+                journal_name_article = clean_text(article.get('journal_name', ''))
+                if journal_name_article:
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Journal:</b> {journal_name_article}", meta_style))
                 
                 year = article.get('publication_year', '')
                 volume = article.get('volume', '')
@@ -2377,7 +2600,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
         story.append(Spacer(1, 0.3*cm))
         story.append(PageBreak())
     
-    # Conclusion
     story.append(Paragraph("Conclusion", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -2392,7 +2614,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     story.append(Paragraph(conclusion_text, conclusion_style))
     story.append(Spacer(1, 1*cm))
     
-    # App logo at the end
     try:
         possible_paths = [
             "logo.png",
@@ -2487,11 +2708,12 @@ def step_data_input():
                 if dois:
                     st.session_state.dois = dois
                     st.session_state.current_step = 2
-                    # Инвалидируем кэш при новом анализе
                     if 'pdf_cache' in st.session_state:
                         del st.session_state.pdf_cache
                     if 'all_reports_generated' in st.session_state:
                         del st.session_state.all_reports_generated
+                    if 'filtered_articles' in st.session_state:
+                        del st.session_state.filtered_articles
                     st.rerun()
                 else:
                     st.error("❌ No valid DOI identifiers found.")
@@ -2510,6 +2732,13 @@ def step_analysis():
     if 'dois' not in st.session_state:
         st.error("❌ No data to analyze. Please go back to Step 1.")
         return
+    
+    # Back button
+    col_back, col_main = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.current_step = 1
+            st.rerun()
     
     dois = st.session_state.dois
     
@@ -2616,6 +2845,13 @@ def step_topic_selection():
         st.error("❌ No data available. Please start from Step 1.")
         return
     
+    # Back button
+    col_back, col_main = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.current_step = 2
+            st.rerun()
+    
     topics = st.session_state.topic_counter.most_common()
     
     cols = st.columns(2)
@@ -2668,6 +2904,13 @@ def step_year_selection():
         st.error("❌ Topic not selected. Please go back to Step 3.")
         return
     
+    # Back button
+    col_back, col_main = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.current_step = 3
+            st.rerun()
+    
     topic_id = st.session_state.selected_topic_id
     topic_name = st.session_state.get('selected_topic', 'Selected Topic')
     
@@ -2677,7 +2920,6 @@ def step_year_selection():
     </div>
     """, unsafe_allow_html=True)
     
-    # Year input with examples
     st.markdown("""
     <div class="filter-section" style="background: rgba(255, 255, 255, 0.9); border-radius: 20px; padding: 20px; margin-bottom: 20px; border: 1px solid rgba(102, 126, 234, 0.2);">
         <div class="filter-header" style="font-size: 1.1rem; font-weight: 600; color: #495057; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #667eea;">
@@ -2685,7 +2927,6 @@ def step_year_selection():
         </div>
     """, unsafe_allow_html=True)
     
-    # Help text with examples
     st.markdown("""
     <div style="font-size: 0.9rem; color: #666; margin-bottom: 10px;">
         <strong>Supported formats:</strong>
@@ -2701,7 +2942,6 @@ def step_year_selection():
     </div>
     """, unsafe_allow_html=True)
     
-    # Text input for years
     years_input = st.text_input(
         "Enter publication years",
         value=st.session_state.get('years_input', ''),
@@ -2711,7 +2951,6 @@ def step_year_selection():
     
     st.markdown("</div>", unsafe_allow_html=True)
     
-    # Parse and display preview of selected years
     if years_input:
         years = parse_year_filter(years_input)
         if years:
@@ -2761,6 +3000,13 @@ def step_results():
         st.error("❌ Topic not selected. Please go back.")
         return
     
+    # Back button
+    col_back, col_main = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.current_step = 4
+            st.rerun()
+    
     topic_id = st.session_state.selected_topic_id
     topic_name = st.session_state.get('selected_topic', 'Selected Topic')
     years = st.session_state.get('selected_years', [])
@@ -2778,7 +3024,6 @@ def step_results():
                 st.error("❌ No works found for this topic and year range.")
                 return
             
-            # Enrich all works
             enriched_works = []
             for work in all_works:
                 enriched = enrich_work_data_full(work)
@@ -2794,17 +3039,63 @@ def step_results():
         st.warning("⚠️ No valid works found after enrichment.")
         return
     
+    # Use filtered articles if available, otherwise use all works
+    if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
+        current_articles = st.session_state.filtered_articles
+        st.info(f"🔍 Showing {len(current_articles)} filtered articles (out of {len(enriched_works)} total)")
+    else:
+        current_articles = enriched_works
+    
     # Statistics
-    total_articles = len(enriched_works)
-    total_citations = sum(w.get('cited_by_count', 0) for w in enriched_works)
+    total_articles = len(current_articles)
+    total_citations = sum(w.get('cited_by_count', 0) for w in current_articles)
     avg_citations = total_citations / total_articles if total_articles > 0 else 0
+    
+    # Sorting options
+    st.markdown("### ⚙️ Report Sorting Options")
+    
+    col_sort1, col_sort2, col_sort3 = st.columns(3)
+    
+    with col_sort1:
+        sort_publisher = st.radio(
+            "Publisher → Journal sorting:",
+            options=["Alphabetical", "By Article Count"],
+            index=0,
+            key="sort_publisher"
+        )
+    
+    with col_sort2:
+        sort_citations = st.radio(
+            "Citations Report sorting:",
+            options=["Citations per Year", "Total Citations"],
+            index=0,
+            key="sort_citations"
+        )
+    
+    with col_sort3:
+        sort_country = st.radio(
+            "Country → Affiliation sorting:",
+            options=["Alphabetical", "By Article Count"],
+            index=0,
+            key="sort_country"
+        )
     
     # Generate groupings with caching
     with st.spinner("Generating report groupings..."):
-        # Используем кэшированные функции
-        publisher_hierarchy = cached_group_articles_by_publisher_journal(tuple(enriched_works))
-        country_hierarchy = cached_group_articles_by_country_affiliation(tuple(enriched_works))
-        citations_sorted = cached_sort_articles_by_citations(tuple(enriched_works))
+        publisher_hierarchy = cached_group_articles_by_publisher_journal(tuple(current_articles))
+        country_hierarchy = cached_group_articles_by_country_affiliation(tuple(current_articles))
+        
+        # Apply sorting based on user selection
+        if sort_publisher == "By Article Count":
+            publisher_hierarchy = sort_hierarchy_by_article_count(publisher_hierarchy)
+        
+        if sort_country == "By Article Count":
+            country_hierarchy = sort_hierarchy_by_article_count(country_hierarchy)
+        
+        citations_sorted = cached_sort_articles_by_citations(
+            tuple(current_articles), 
+            'total_citations' if sort_citations == "Total Citations" else 'citations_per_year'
+        )
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -2843,7 +3134,6 @@ def step_results():
     journal_abbr = generate_journal_abbreviation(journal_name)
     logo_path = None
     
-    # Try to find logo
     possible_paths = [
         "logo.png",
         "./logo.png",
@@ -2856,28 +3146,33 @@ def step_results():
             logo_path = path
             break
     
-    # Инициализация кэша PDF в session_state
     if 'pdf_cache' not in st.session_state:
         st.session_state.pdf_cache = {}
     if 'all_reports_generated' not in st.session_state:
         st.session_state.all_reports_generated = False
     
-    # Создаем уникальные ключи для кэша на основе текущего анализа
-    cache_key_publisher = f"publisher_{journal_abbr}_{'_'.join(map(str, years))}"
-    cache_key_citations = f"citations_{journal_abbr}_{'_'.join(map(str, years))}"
-    cache_key_country = f"country_{journal_abbr}_{'_'.join(map(str, years))}"
+    cache_key_publisher = f"publisher_{journal_abbr}_{'_'.join(map(str, years))}_{sort_publisher}"
+    cache_key_citations = f"citations_{journal_abbr}_{'_'.join(map(str, years))}_{sort_citations}"
+    cache_key_country = f"country_{journal_abbr}_{'_'.join(map(str, years))}_{sort_country}"
     
-    # Кнопка для предварительной генерации всех отчетов
+    # Advanced Search button
+    col_adv1, col_adv2, col_adv3 = st.columns([1, 2, 1])
+    with col_adv2:
+        if st.button("🔍 Advanced Search (Filter Articles)", type="secondary", use_container_width=True):
+            st.session_state.current_step = 6
+            st.rerun()
+    
+    st.markdown("---")
+    
     col_gen1, col_gen2, col_gen3 = st.columns([1, 1, 1])
     with col_gen2:
         if not st.session_state.all_reports_generated:
-            if st.button("⚡ Сгенерировать все отчеты", type="primary", use_container_width=True):
-                with st.spinner("Генерация всех отчетов..."):
+            if st.button("⚡ Generate All Reports", type="primary", use_container_width=True):
+                with st.spinner("Generating all reports..."):
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                    # Генерируем Publisher Report
-                    status_text.text("Генерация отчета Publisher → Journal...")
+                    status_text.text("Generating Publisher → Journal report...")
                     if cache_key_publisher not in st.session_state.pdf_cache:
                         st.session_state.pdf_cache[cache_key_publisher] = generate_pdf_by_publisher_journal(
                             journal_name, journal_abbr, years,
@@ -2886,8 +3181,7 @@ def step_results():
                         )
                     progress_bar.progress(0.33)
                     
-                    # Генерируем Citations Report
-                    status_text.text("Генерация отчета Citations per Year...")
+                    status_text.text("Generating Citations per Year report...")
                     if cache_key_citations not in st.session_state.pdf_cache:
                         st.session_state.pdf_cache[cache_key_citations] = generate_pdf_by_citations(
                             journal_name, journal_abbr, years,
@@ -2896,8 +3190,7 @@ def step_results():
                         )
                     progress_bar.progress(0.66)
                     
-                    # Генерируем Country Report
-                    status_text.text("Генерация отчета Country → Affiliation...")
+                    status_text.text("Generating Country → Affiliation report...")
                     if cache_key_country not in st.session_state.pdf_cache:
                         st.session_state.pdf_cache[cache_key_country] = generate_pdf_by_country_affiliation(
                             journal_name, journal_abbr, years,
@@ -2906,28 +3199,24 @@ def step_results():
                         )
                     progress_bar.progress(1.0)
                     
-                    status_text.text("✅ Все отчеты сгенерированы!")
+                    status_text.text("✅ All reports generated!")
                     st.session_state.all_reports_generated = True
                     time.sleep(0.5)
                     st.rerun()
         else:
-            st.success("✅ Все отчеты уже сгенерированы! Используйте кнопки ниже для скачивания.")
+            st.success("✅ All reports already generated! Use the buttons below to download.")
     
     st.markdown("---")
     
-    # Три отчета в колонках
     col1, col2, col3 = st.columns(3)
     
-    # Report 1: Publisher -> Journal
     with col1:
         st.markdown("**📚 Report 1: Publisher → Journal**")
-        st.markdown("*Alphabetical sorting*")
+        st.markdown(f"*{sort_publisher} sorting*")
         
-        # Проверяем, есть ли PDF в кэше
         if cache_key_publisher in st.session_state.pdf_cache:
             pdf_data = st.session_state.pdf_cache[cache_key_publisher]
         else:
-            # Если не сгенерирован, генерируем при нажатии кнопки
             pdf_data = None
         
         if pdf_data is not None:
@@ -2941,8 +3230,8 @@ def step_results():
                 key="pdf_publisher_download"
             )
         else:
-            if st.button("📄 Сгенерировать Publisher Report", key="gen_publisher", use_container_width=True):
-                with st.spinner("Генерация Publisher Report..."):
+            if st.button("📄 Generate Publisher Report", key="gen_publisher", use_container_width=True):
+                with st.spinner("Generating Publisher Report..."):
                     pdf_data = generate_pdf_by_publisher_journal(
                         journal_name, journal_abbr, years,
                         publisher_hierarchy, logo_path,
@@ -2951,10 +3240,9 @@ def step_results():
                     st.session_state.pdf_cache[cache_key_publisher] = pdf_data
                     st.rerun()
     
-    # Report 2: Citations per Year
     with col2:
-        st.markdown("**📈 Report 2: Citations per Year**")
-        st.markdown("*Descending sorting*")
+        st.markdown("**📈 Report 2: Citations**")
+        st.markdown(f"*{sort_citations} sorting*")
         
         if cache_key_citations in st.session_state.pdf_cache:
             pdf_data = st.session_state.pdf_cache[cache_key_citations]
@@ -2972,8 +3260,8 @@ def step_results():
                 key="pdf_citations_download"
             )
         else:
-            if st.button("📄 Сгенерировать Citations Report", key="gen_citations", use_container_width=True):
-                with st.spinner("Генерация Citations Report..."):
+            if st.button("📄 Generate Citations Report", key="gen_citations", use_container_width=True):
+                with st.spinner("Generating Citations Report..."):
                     pdf_data = generate_pdf_by_citations(
                         journal_name, journal_abbr, years,
                         citations_sorted, logo_path,
@@ -2982,10 +3270,9 @@ def step_results():
                     st.session_state.pdf_cache[cache_key_citations] = pdf_data
                     st.rerun()
     
-    # Report 3: Country -> Affiliation
     with col3:
         st.markdown("**🌍 Report 3: Country → Affiliation**")
-        st.markdown("*Alphabetical sorting*")
+        st.markdown(f"*{sort_country} sorting*")
         
         if cache_key_country in st.session_state.pdf_cache:
             pdf_data = st.session_state.pdf_cache[cache_key_country]
@@ -3003,8 +3290,8 @@ def step_results():
                 key="pdf_country_download"
             )
         else:
-            if st.button("📄 Сгенерировать Country Report", key="gen_country", use_container_width=True):
-                with st.spinner("Генерация Country Report..."):
+            if st.button("📄 Generate Country Report", key="gen_country", use_container_width=True):
+                with st.spinner("Generating Country Report..."):
                     pdf_data = generate_pdf_by_country_affiliation(
                         journal_name, journal_abbr, years,
                         country_hierarchy, logo_path,
@@ -3015,7 +3302,6 @@ def step_results():
     
     st.markdown("---")
     
-    # Кнопка для скачивания всех отчетов в ZIP
     if st.session_state.all_reports_generated:
         if all(key in st.session_state.pdf_cache for key in [cache_key_publisher, cache_key_citations, cache_key_country]):
             try:
@@ -3034,7 +3320,7 @@ def step_results():
                 col_zip1, col_zip2, col_zip3 = st.columns([1, 2, 1])
                 with col_zip2:
                     st.download_button(
-                        label="📦 Скачать все отчеты (ZIP архив)",
+                        label="📦 Download All Reports (ZIP archive)",
                         data=zip_data,
                         file_name=f"{journal_abbr}_{format_year_filter_for_filename(years)}_all_reports.zip",
                         mime="application/zip",
@@ -3042,7 +3328,201 @@ def step_results():
                         key="download_all_zip"
                     )
             except Exception as e:
-                st.error(f"Ошибка при создании ZIP архива: {e}")
+                st.error(f"Error creating ZIP archive: {e}")
+    
+    st.markdown("---")
+    
+    if st.button("🔄 New Analysis", use_container_width=True):
+        keys_to_clear = ['current_step', 'dois', 'works_data', 'topic_counter', 
+                        'keyword_counter', 'successful', 'failed', 'selected_topic',
+                        'selected_topic_id', 'selected_years', 'all_works', 
+                        'enriched_count', 'years_input', 'pdf_cache', 'all_reports_generated',
+                        'filtered_articles']
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.session_state.current_step = 1
+        st.rerun()
+
+# ============================================================================
+# STEP 6: ADVANCED SEARCH
+# ============================================================================
+
+def step_advanced_search():
+    """Step 6: Advanced search and filtering of articles"""
+    st.markdown("""
+    <div class="step-card">
+        <h3 style="margin: 0; font-size: 1.3rem;">🔍 Step 6: Advanced Search</h3>
+        <p style="margin: 5px 0; font-size: 0.9rem;">Filter articles by title using advanced search syntax.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if 'all_works' not in st.session_state:
+        st.error("❌ No data available. Please go back to Step 5.")
+        return
+    
+    # Back button
+    col_back, col_main = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back to Reports", use_container_width=True):
+            st.session_state.current_step = 5
+            st.rerun()
+    
+    all_articles = st.session_state.all_works
+    total_articles = len(all_articles)
+    
+    st.markdown(f"""
+    <div style="background: white; border-radius: 8px; padding: 12px; border: 1px solid #ced4da; margin-bottom: 15px;">
+        <strong>Total articles available:</strong> {total_articles}
+        <br><small style="color: #666;">Enter search query to filter articles by title</small>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="filter-section" style="background: rgba(255, 255, 255, 0.9); border-radius: 20px; padding: 20px; margin-bottom: 20px; border: 1px solid rgba(102, 126, 234, 0.2);">
+        <div class="filter-header" style="font-size: 1.1rem; font-weight: 600; color: #495057; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #667eea;">
+            🔍 Search Syntax
+        </div>
+        
+        <div style="font-size: 0.9rem; color: #666; margin-bottom: 10px;">
+            <strong>Supported syntax:</strong>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; font-size: 0.85rem;">
+            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #667eea;">
+                <code>"high temperature"</code> — Exact phrase match
+            </div>
+            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #27ae60;">
+                <code>high temperature</code> — Both words must appear (AND logic)
+            </div>
+            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e67e22;">
+                <code>catal*</code> — Wildcard: matches catalysis, catalyst, catalytic, etc.
+            </div>
+            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #8e44ad;">
+                <code>fuel cell</code> — Automatically matches "fuel cells" (plural support)
+            </div>
+            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e74c3c;">
+                <code>"high temperature" catalysis*</code> — Combined: exact phrase AND wildcard
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Search input
+    search_query = st.text_input(
+        "Enter search query:",
+        value=st.session_state.get('search_query', ''),
+        placeholder='Example: "high temperature" catalysis* OR "fuel cell" polymer',
+        help="Use quotes for exact phrases, * for wildcards"
+    )
+    
+    col_search1, col_search2, col_search3 = st.columns([1, 1, 1])
+    
+    with col_search1:
+        if st.button("🔍 Search", type="primary", use_container_width=True):
+            if search_query and search_query.strip():
+                with st.spinner("Filtering articles..."):
+                    filtered = filter_articles_by_query(all_articles, search_query)
+                    st.session_state.filtered_articles = filtered
+                    st.session_state.search_query = search_query
+                    st.session_state.search_results_count = len(filtered)
+                    st.rerun()
+            else:
+                st.warning("⚠️ Please enter a search query.")
+    
+    with col_search2:
+        if st.button("🔄 Reset Filter", use_container_width=True):
+            if 'filtered_articles' in st.session_state:
+                del st.session_state.filtered_articles
+            if 'search_query' in st.session_state:
+                del st.session_state.search_query
+            if 'search_results_count' in st.session_state:
+                del st.session_state.search_results_count
+            st.rerun()
+    
+    with col_search3:
+        if st.button("📊 Generate Reports from Filtered", use_container_width=True, type="secondary"):
+            if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
+                st.session_state.current_step = 5
+                st.rerun()
+            else:
+                st.warning("⚠️ No filtered articles to generate reports from.")
+    
+    # Show results
+    if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
+        filtered = st.session_state.filtered_articles
+        query = st.session_state.get('search_query', '')
+        
+        st.markdown("---")
+        st.markdown(f"### 📋 Search Results: {len(filtered)} articles found")
+        
+        if query:
+            st.markdown(f"**Query:** `{query}`")
+        
+        # Show preview of filtered articles
+        with st.expander(f"Show {len(filtered)} filtered articles", expanded=False):
+            for idx, article in enumerate(filtered[:50], 1):
+                title = article.get('title', 'No title')
+                year = article.get('publication_year', '')
+                journal = article.get('journal_name', '')
+                
+                st.markdown(f"""
+                <div class="result-card" style="padding: 10px; margin-bottom: 6px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-weight: 600; color: #667eea;">{idx}.</span>
+                        <span style="font-weight: 500;">{title}</span>
+                    </div>
+                    <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
+                        {f'Year: {year} ' if year else ''}
+                        {f'| Journal: {journal}' if journal else ''}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            if len(filtered) > 50:
+                st.info(f"Showing first 50 of {len(filtered)} articles")
+        
+        # Show statistics
+        st.markdown("---")
+        st.markdown("### 📊 Filtered Statistics")
+        
+        filtered_years = [a.get('publication_year', 0) for a in filtered if a.get('publication_year', 0) > 0]
+        filtered_citations = sum(a.get('cited_by_count', 0) for a in filtered)
+        filtered_avg_citations = filtered_citations / len(filtered) if filtered else 0
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-value">{len(filtered)}</div>
+                <div class="metric-label">Filtered Articles</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col2:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-value">{filtered_citations}</div>
+                <div class="metric-label">Total Citations</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-value">{filtered_avg_citations:.1f}</div>
+                <div class="metric-label">Avg Citations/Article</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Generate reports button
+        col_go1, col_go2, col_go3 = st.columns([1, 2, 1])
+        with col_go2:
+            if st.button("📊 Generate Reports from Filtered Articles", type="primary", use_container_width=True):
+                st.session_state.current_step = 5
+                st.rerun()
+    
+    elif 'filtered_articles' in st.session_state and not st.session_state.filtered_articles:
+        st.warning("⚠️ No articles match your search query. Try a different query or reset the filter.")
     
     st.markdown("---")
     
@@ -3051,7 +3531,8 @@ def step_results():
         keys_to_clear = ['current_step', 'dois', 'works_data', 'topic_counter', 
                         'keyword_counter', 'successful', 'failed', 'selected_topic',
                         'selected_topic_id', 'selected_years', 'all_works', 
-                        'enriched_count', 'years_input', 'pdf_cache', 'all_reports_generated']
+                        'enriched_count', 'years_input', 'pdf_cache', 'all_reports_generated',
+                        'filtered_articles', 'search_query', 'search_results_count']
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
@@ -3110,9 +3591,9 @@ def main():
     """, unsafe_allow_html=True)
     
     # Progress bar
-    steps = ["Input", "Analysis", "Topic", "Years", "Reports"]
+    steps = ["Input", "Analysis", "Topic", "Years", "Reports", "Search"]
     current_step = st.session_state.current_step
-    progress = (current_step - 1) / 4
+    progress = (current_step - 1) / 5
     
     st.markdown(f"""
     <div class="progress-container" style="background: #f5f5f5; border-radius: 8px; height: 6px; margin: 20px 0; overflow: hidden;">
@@ -3124,6 +3605,7 @@ def main():
         <span class="{'active' if current_step >= 3 else ''}" style="color: {'#667eea' if current_step >= 3 else '#666'}; font-weight: {'600' if current_step >= 3 else '400'};">🎯 Topic</span>
         <span class="{'active' if current_step >= 4 else ''}" style="color: {'#667eea' if current_step >= 4 else '#666'}; font-weight: {'600' if current_step >= 4 else '400'};">⏰ Years</span>
         <span class="{'active' if current_step >= 5 else ''}" style="color: {'#667eea' if current_step >= 5 else '#666'}; font-weight: {'600' if current_step >= 5 else '400'};">📊 Reports</span>
+        <span class="{'active' if current_step >= 6 else ''}" style="color: {'#667eea' if current_step >= 6 else '#666'}; font-weight: {'600' if current_step >= 6 else '400'};">🔍 Search</span>
     </div>
     """, unsafe_allow_html=True)
     
@@ -3138,6 +3620,8 @@ def main():
         step_year_selection()
     elif st.session_state.current_step == 5:
         step_results()
+    elif st.session_state.current_step == 6:
+        step_advanced_search()
     
     # Footer
     st.markdown("""
