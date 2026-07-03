@@ -1550,10 +1550,11 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     # Table of Contents
     story.append(Paragraph("Table of Contents", title_style))
     story.append(Spacer(1, 0.5*cm))
-    
+        
     for publisher, journals in hierarchy.items():
         publisher_articles = sum(len(articles) for articles in journals.values())
         anchor_id = f"publisher_{hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]}"
+        # Используем <a> для внутренних ссылок (это работает в ReportLab)
         story.append(Paragraph(f'<a href="#{anchor_id}"><b>{clean_text(publisher)}</b> — {publisher_articles} articles</a>', toc_publisher_style))
         
         for journal, articles in journals.items():
@@ -1622,7 +1623,8 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 
                 doi_url = article.get('doi_url', '')
                 if doi_url:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <link href='{doi_url}'>{doi_url}</link>", meta_style))
+                    doi_url_clean = doi_url.replace('&', '&amp;')
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <link href='{doi_url_clean}'>{doi_url_clean}</link>", meta_style))
                 
                 story.append(Spacer(1, 0.15*cm))
                 
@@ -1941,7 +1943,8 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         
         doi_url = article.get('doi_url', '')
         if doi_url:
-            story.append(Paragraph(f"<b>DOI:</b> <link href='{doi_url}'>{doi_url}</link>", meta_style))
+            doi_url_clean = doi_url.replace('&', '&amp;')
+            story.append(Paragraph(f"<b>DOI:</b> <link href='{doi_url_clean}'>{doi_url_clean}</link>", meta_style))
         
         story.append(Spacer(1, 0.15*cm))
         
@@ -2303,7 +2306,8 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 
                 doi_url = article.get('doi_url', '')
                 if doi_url:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <link href='{doi_url}'>{doi_url}</link>", meta_style))
+                    doi_url_clean = doi_url.replace('&', '&amp;')
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <link href='{doi_url_clean}'>{doi_url_clean}</link>", meta_style))
                 
                 story.append(Spacer(1, 0.15*cm))
                 
