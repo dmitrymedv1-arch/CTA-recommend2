@@ -1635,7 +1635,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 doi_url = article.get('doi_url', '')
                 if doi_url:
                     doi_url_clean = doi_url.replace('&', '&amp;')
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <link href='{doi_url_clean}'>{doi_url_clean}</link>", meta_style))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style))
                 
                 story.append(Spacer(1, 0.15*cm))
                 
@@ -1955,7 +1955,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         doi_url = article.get('doi_url', '')
         if doi_url:
             doi_url_clean = doi_url.replace('&', '&amp;')
-            story.append(Paragraph(f"<b>DOI:</b> <link href='{doi_url_clean}'>{doi_url_clean}</link>", meta_style))
+            story.append(Paragraph(f"<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style))
         
         story.append(Spacer(1, 0.15*cm))
         
@@ -2318,7 +2318,7 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 doi_url = article.get('doi_url', '')
                 if doi_url:
                     doi_url_clean = doi_url.replace('&', '&amp;')
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <link href='{doi_url_clean}'>{doi_url_clean}</link>", meta_style))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style))
                 
                 story.append(Spacer(1, 0.15*cm))
                 
