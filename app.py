@@ -37,6 +37,7 @@ import xlsxwriter
 from PIL import Image as PILImage
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+import zipfile
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -1112,9 +1113,10 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     elif last_page:
         pages_str = last_page
     
-    # Get journal and publisher info
+    # Get journal and publisher info - FIXED: use host_organization_name
     journal_name = ''
     publisher = ''
+    publisher_chain = []
     primary_location = work.get('primary_location')
     if primary_location:
         source = primary_location.get('source', {})
@@ -1128,7 +1130,6 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
             # Если все еще нет, пробуем host_organization
             if not publisher:
                 publisher = source.get('host_organization', '') or ''
-            
             # Получаем цепочку издателей
             publisher_chain = source.get('host_organization_lineage_names', [])
     
@@ -1170,7 +1171,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         'affiliations_str': affiliations_str,
         'journal_name': journal_name,
         'publisher': publisher,
-        'publisher_chain': publisher_chain,
+        'publisher_chain': publisher_chain,  # новое поле для цепочки издателей
         'volume': volume,
         'issue': issue,
         'pages': pages_str,
@@ -1184,8 +1185,32 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     return enriched
 
 # ============================================================================
-# HIERARCHICAL GROUPING FUNCTIONS
+# HIERARCHICAL GROUPING FUNCTIONS WITH CACHING
 # ============================================================================
+
+@st.cache_data(ttl=3600)  # кэш на 1 час
+def cached_group_articles_by_publisher_journal(articles_tuple: tuple) -> Dict[str, Dict[str, List[dict]]]:
+    """
+    Cached version of group_articles_by_publisher_journal.
+    """
+    articles = list(articles_tuple)
+    return group_articles_by_publisher_journal(articles)
+
+@st.cache_data(ttl=3600)
+def cached_group_articles_by_country_affiliation(articles_tuple: tuple) -> Dict[str, Dict[str, List[dict]]]:
+    """
+    Cached version of group_articles_by_country_affiliation.
+    """
+    articles = list(articles_tuple)
+    return group_articles_by_country_affiliation(articles)
+
+@st.cache_data(ttl=3600)
+def cached_sort_articles_by_citations(articles_tuple: tuple) -> List[dict]:
+    """
+    Cached version of sort_articles_by_citations.
+    """
+    articles = list(articles_tuple)
+    return sort_articles_by_citations(articles)
 
 def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[str, List[dict]]]:
     """
@@ -1199,6 +1224,16 @@ def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[
         # Ensure publisher is not None
         if publisher is None:
             publisher = 'Unknown Publisher'
+        # Если publisher начинается с "https://openalex.org/", то это ID, а не имя
+        if isinstance(publisher, str) and publisher.startswith('https://openalex.org/'):
+            # Пробуем получить имя из цепочки издателей
+            publisher_chain = article.get('publisher_chain', [])
+            if publisher_chain and len(publisher_chain) > 0:
+                publisher = publisher_chain[0]  # Берем первое имя из цепочки
+            else:
+                # Если цепочка пуста, оставляем как есть или ставим Unknown
+                publisher = 'Unknown Publisher'
+        
         journal = article.get('journal_name', 'Unknown Journal')
         # Ensure journal is not None
         if journal is None:
@@ -1643,7 +1678,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 
                 doi_url = article.get('doi_url', '')
                 if doi_url:
-                    doi_url_clean = doi_url.replace('&', '&amp;')
+                    doi_url_clean = clean_doi_url(doi_url)
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style))
                 
                 story.append(Spacer(1, 0.15*cm))
@@ -1963,7 +1998,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         
         doi_url = article.get('doi_url', '')
         if doi_url:
-            doi_url_clean = doi_url.replace('&', '&amp;')
+            doi_url_clean = clean_doi_url(doi_url)
             story.append(Paragraph(f"<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style))
         
         story.append(Spacer(1, 0.15*cm))
@@ -2326,7 +2361,7 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 
                 doi_url = article.get('doi_url', '')
                 if doi_url:
-                    doi_url_clean = doi_url.replace('&', '&amp;')
+                    doi_url_clean = clean_doi_url(doi_url)
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style))
                 
                 story.append(Spacer(1, 0.15*cm))
@@ -2450,6 +2485,11 @@ def step_data_input():
                 if dois:
                     st.session_state.dois = dois
                     st.session_state.current_step = 2
+                    # Инвалидируем кэш при новом анализе
+                    if 'pdf_cache' in st.session_state:
+                        del st.session_state.pdf_cache
+                    if 'all_reports_generated' in st.session_state:
+                        del st.session_state.all_reports_generated
                     st.rerun()
                 else:
                     st.error("❌ No valid DOI identifiers found.")
@@ -2757,11 +2797,12 @@ def step_results():
     total_citations = sum(w.get('cited_by_count', 0) for w in enriched_works)
     avg_citations = total_citations / total_articles if total_articles > 0 else 0
     
-    # Generate groupings
+    # Generate groupings with caching
     with st.spinner("Generating report groupings..."):
-        publisher_hierarchy = group_articles_by_publisher_journal(enriched_works)
-        country_hierarchy = group_articles_by_country_affiliation(enriched_works)
-        citations_sorted = sort_articles_by_citations(enriched_works)
+        # Используем кэшированные функции
+        publisher_hierarchy = cached_group_articles_by_publisher_journal(tuple(enriched_works))
+        country_hierarchy = cached_group_articles_by_country_affiliation(tuple(enriched_works))
+        citations_sorted = cached_sort_articles_by_citations(tuple(enriched_works))
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -2813,18 +2854,81 @@ def step_results():
             logo_path = path
             break
     
+    # Инициализация кэша PDF в session_state
+    if 'pdf_cache' not in st.session_state:
+        st.session_state.pdf_cache = {}
+    if 'all_reports_generated' not in st.session_state:
+        st.session_state.all_reports_generated = False
+    
+    # Создаем уникальные ключи для кэша на основе текущего анализа
+    cache_key_publisher = f"publisher_{journal_abbr}_{'_'.join(map(str, years))}"
+    cache_key_citations = f"citations_{journal_abbr}_{'_'.join(map(str, years))}"
+    cache_key_country = f"country_{journal_abbr}_{'_'.join(map(str, years))}"
+    
+    # Кнопка для предварительной генерации всех отчетов
+    col_gen1, col_gen2, col_gen3 = st.columns([1, 1, 1])
+    with col_gen2:
+        if not st.session_state.all_reports_generated:
+            if st.button("⚡ Сгенерировать все отчеты", type="primary", use_container_width=True):
+                with st.spinner("Генерация всех отчетов..."):
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Генерируем Publisher Report
+                    status_text.text("Генерация отчета Publisher → Journal...")
+                    if cache_key_publisher not in st.session_state.pdf_cache:
+                        st.session_state.pdf_cache[cache_key_publisher] = generate_pdf_by_publisher_journal(
+                            journal_name, journal_abbr, years,
+                            publisher_hierarchy, logo_path,
+                            "Report by Publisher & Journal"
+                        )
+                    progress_bar.progress(0.33)
+                    
+                    # Генерируем Citations Report
+                    status_text.text("Генерация отчета Citations per Year...")
+                    if cache_key_citations not in st.session_state.pdf_cache:
+                        st.session_state.pdf_cache[cache_key_citations] = generate_pdf_by_citations(
+                            journal_name, journal_abbr, years,
+                            citations_sorted, logo_path,
+                            "Report by Citations per Year"
+                        )
+                    progress_bar.progress(0.66)
+                    
+                    # Генерируем Country Report
+                    status_text.text("Генерация отчета Country → Affiliation...")
+                    if cache_key_country not in st.session_state.pdf_cache:
+                        st.session_state.pdf_cache[cache_key_country] = generate_pdf_by_country_affiliation(
+                            journal_name, journal_abbr, years,
+                            country_hierarchy, logo_path,
+                            "Report by Country & Affiliation"
+                        )
+                    progress_bar.progress(1.0)
+                    
+                    status_text.text("✅ Все отчеты сгенерированы!")
+                    st.session_state.all_reports_generated = True
+                    time.sleep(0.5)
+                    st.rerun()
+        else:
+            st.success("✅ Все отчеты уже сгенерированы! Используйте кнопки ниже для скачивания.")
+    
+    st.markdown("---")
+    
+    # Три отчета в колонках
     col1, col2, col3 = st.columns(3)
     
     # Report 1: Publisher -> Journal
     with col1:
         st.markdown("**📚 Report 1: Publisher → Journal**")
         st.markdown("*Alphabetical sorting*")
-        with st.spinner("Generating PDF..."):
-            pdf_data = generate_pdf_by_publisher_journal(
-                journal_name, journal_abbr, years,
-                publisher_hierarchy, logo_path,
-                "Report by Publisher & Journal"
-            )
+        
+        # Проверяем, есть ли PDF в кэше
+        if cache_key_publisher in st.session_state.pdf_cache:
+            pdf_data = st.session_state.pdf_cache[cache_key_publisher]
+        else:
+            # Если не сгенерирован, генерируем при нажатии кнопки
+            pdf_data = None
+        
+        if pdf_data is not None:
             filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_publisher_journal.pdf"
             st.download_button(
                 label="📄 Download Publisher Report",
@@ -2832,19 +2936,30 @@ def step_results():
                 file_name=filename,
                 mime="application/pdf",
                 use_container_width=True,
-                key="pdf_publisher"
+                key="pdf_publisher_download"
             )
+        else:
+            if st.button("📄 Сгенерировать Publisher Report", key="gen_publisher", use_container_width=True):
+                with st.spinner("Генерация Publisher Report..."):
+                    pdf_data = generate_pdf_by_publisher_journal(
+                        journal_name, journal_abbr, years,
+                        publisher_hierarchy, logo_path,
+                        "Report by Publisher & Journal"
+                    )
+                    st.session_state.pdf_cache[cache_key_publisher] = pdf_data
+                    st.rerun()
     
     # Report 2: Citations per Year
     with col2:
         st.markdown("**📈 Report 2: Citations per Year**")
         st.markdown("*Descending sorting*")
-        with st.spinner("Generating PDF..."):
-            pdf_data = generate_pdf_by_citations(
-                journal_name, journal_abbr, years,
-                citations_sorted, logo_path,
-                "Report by Citations per Year"
-            )
+        
+        if cache_key_citations in st.session_state.pdf_cache:
+            pdf_data = st.session_state.pdf_cache[cache_key_citations]
+        else:
+            pdf_data = None
+        
+        if pdf_data is not None:
             filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_citations.pdf"
             st.download_button(
                 label="📄 Download Citations Report",
@@ -2852,19 +2967,30 @@ def step_results():
                 file_name=filename,
                 mime="application/pdf",
                 use_container_width=True,
-                key="pdf_citations"
+                key="pdf_citations_download"
             )
+        else:
+            if st.button("📄 Сгенерировать Citations Report", key="gen_citations", use_container_width=True):
+                with st.spinner("Генерация Citations Report..."):
+                    pdf_data = generate_pdf_by_citations(
+                        journal_name, journal_abbr, years,
+                        citations_sorted, logo_path,
+                        "Report by Citations per Year"
+                    )
+                    st.session_state.pdf_cache[cache_key_citations] = pdf_data
+                    st.rerun()
     
     # Report 3: Country -> Affiliation
     with col3:
         st.markdown("**🌍 Report 3: Country → Affiliation**")
         st.markdown("*Alphabetical sorting*")
-        with st.spinner("Generating PDF..."):
-            pdf_data = generate_pdf_by_country_affiliation(
-                journal_name, journal_abbr, years,
-                country_hierarchy, logo_path,
-                "Report by Country & Affiliation"
-            )
+        
+        if cache_key_country in st.session_state.pdf_cache:
+            pdf_data = st.session_state.pdf_cache[cache_key_country]
+        else:
+            pdf_data = None
+        
+        if pdf_data is not None:
             filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_country_affiliation.pdf"
             st.download_button(
                 label="📄 Download Country Report",
@@ -2872,8 +2998,49 @@ def step_results():
                 file_name=filename,
                 mime="application/pdf",
                 use_container_width=True,
-                key="pdf_country"
+                key="pdf_country_download"
             )
+        else:
+            if st.button("📄 Сгенерировать Country Report", key="gen_country", use_container_width=True):
+                with st.spinner("Генерация Country Report..."):
+                    pdf_data = generate_pdf_by_country_affiliation(
+                        journal_name, journal_abbr, years,
+                        country_hierarchy, logo_path,
+                        "Report by Country & Affiliation"
+                    )
+                    st.session_state.pdf_cache[cache_key_country] = pdf_data
+                    st.rerun()
+    
+    st.markdown("---")
+    
+    # Кнопка для скачивания всех отчетов в ZIP
+    if st.session_state.all_reports_generated:
+        if all(key in st.session_state.pdf_cache for key in [cache_key_publisher, cache_key_citations, cache_key_country]):
+            try:
+                import zipfile
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_publisher_journal.pdf", 
+                                     st.session_state.pdf_cache[cache_key_publisher])
+                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_citations.pdf", 
+                                     st.session_state.pdf_cache[cache_key_citations])
+                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_country_affiliation.pdf", 
+                                     st.session_state.pdf_cache[cache_key_country])
+                
+                zip_data = zip_buffer.getvalue()
+                
+                col_zip1, col_zip2, col_zip3 = st.columns([1, 2, 1])
+                with col_zip2:
+                    st.download_button(
+                        label="📦 Скачать все отчеты (ZIP архив)",
+                        data=zip_data,
+                        file_name=f"{journal_abbr}_{format_year_filter_for_filename(years)}_all_reports.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key="download_all_zip"
+                    )
+            except Exception as e:
+                st.error(f"Ошибка при создании ZIP архива: {e}")
     
     st.markdown("---")
     
@@ -2882,7 +3049,7 @@ def step_results():
         keys_to_clear = ['current_step', 'dois', 'works_data', 'topic_counter', 
                         'keyword_counter', 'successful', 'failed', 'selected_topic',
                         'selected_topic_id', 'selected_years', 'all_works', 
-                        'enriched_count', 'years_input']
+                        'enriched_count', 'years_input', 'pdf_cache', 'all_reports_generated']
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
