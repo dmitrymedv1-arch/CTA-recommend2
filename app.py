@@ -1115,16 +1115,17 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     # Get journal and publisher info
     journal_name = ''
     publisher = ''
-    publisher_chain = []
     primary_location = work.get('primary_location')
     if primary_location:
         source = primary_location.get('source', {})
         if source:
             journal_name = source.get('display_name', '') or ''
-            # Получаем издателя
+            # Сначала пробуем получить host_organization_name
             publisher = source.get('host_organization_name', '') or ''
+            # Если нет, пробуем publisher
             if not publisher:
                 publisher = source.get('publisher', '') or ''
+            # Если все еще нет, пробуем host_organization
             if not publisher:
                 publisher = source.get('host_organization', '') or ''
             
