@@ -1119,10 +1119,10 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     if primary_location:
         source = primary_location.get('source', {})
         if source:
-            journal_name = source.get('display_name', '')
-            publisher = source.get('publisher', '')
+            journal_name = source.get('display_name', '') or ''
+            publisher = source.get('publisher', '') or ''
             if not publisher:
-                publisher = source.get('host_organization', '')
+                publisher = source.get('host_organization', '') or ''
     
     # Extract topic info
     primary_topic = work.get('primary_topic', {})
@@ -1187,18 +1187,24 @@ def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[
     
     for article in articles:
         publisher = article.get('publisher', 'Unknown Publisher')
+        # Ensure publisher is not None
+        if publisher is None:
+            publisher = 'Unknown Publisher'
         journal = article.get('journal_name', 'Unknown Journal')
+        # Ensure journal is not None
+        if journal is None:
+            journal = 'Unknown Journal'
         hierarchy[publisher][journal].append(article)
     
-    # Sort alphabetically
+    # Sort alphabetically, handling None values
     sorted_hierarchy = {}
-    for publisher in sorted(hierarchy.keys()):
+    for publisher in sorted([p for p in hierarchy.keys() if p is not None]):
         sorted_hierarchy[publisher] = {}
-        for journal in sorted(hierarchy[publisher].keys()):
+        for journal in sorted([j for j in hierarchy[publisher].keys() if j is not None]):
             # Sort articles within each journal by citations per year (descending)
             sorted_articles = sorted(
                 hierarchy[publisher][journal],
-                key=lambda x: x.get('citations_per_year', 0),
+                key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
                 reverse=True
             )
             sorted_hierarchy[publisher][journal] = sorted_articles
@@ -1215,20 +1221,30 @@ def group_articles_by_country_affiliation(articles: List[dict]) -> Dict[str, Dic
     
     for article in articles:
         country = article.get('country', 'Unknown')
+        # Ensure country is not None
+        if country is None:
+            country = 'Unknown'
         affiliations = article.get('affiliations', ['Unknown Affiliation'])
+        # Filter out None values from affiliations
+        if not affiliations:
+            affiliations = ['Unknown Affiliation']
+        else:
+            affiliations = [aff for aff in affiliations if aff is not None]
+            if not affiliations:
+                affiliations = ['Unknown Affiliation']
         
         for aff in affiliations:
             hierarchy[country][aff].append(article)
     
-    # Sort alphabetically
+    # Sort alphabetically, handling None values
     sorted_hierarchy = {}
-    for country in sorted(hierarchy.keys()):
+    for country in sorted([c for c in hierarchy.keys() if c is not None]):
         sorted_hierarchy[country] = {}
-        for affiliation in sorted(hierarchy[country].keys()):
+        for affiliation in sorted([a for a in hierarchy[country].keys() if a is not None]):
             # Sort articles within each affiliation by citations per year (descending)
             sorted_articles = sorted(
                 hierarchy[country][affiliation],
-                key=lambda x: x.get('citations_per_year', 0),
+                key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
                 reverse=True
             )
             sorted_hierarchy[country][affiliation] = sorted_articles
@@ -1241,7 +1257,7 @@ def sort_articles_by_citations(articles: List[dict]) -> List[dict]:
     """
     return sorted(
         articles,
-        key=lambda x: x.get('citations_per_year', 0),
+        key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
         reverse=True
     )
 
@@ -1290,6 +1306,8 @@ def register_russian_font():
     return russian_font_name
 
 def clean_text(text):
+    if text is None:
+        return ""
     if not text:
         return ""
     if isinstance(text, bytes):
