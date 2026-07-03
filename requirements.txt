@@ -15,3 +15,4 @@ aiohttp
 joblib
 scipy
 scikit-learn
+nltk
