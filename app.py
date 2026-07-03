@@ -1225,14 +1225,16 @@ def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[
         if publisher is None:
             publisher = 'Unknown Publisher'
         # Если publisher начинается с "https://openalex.org/", то это ID, а не имя
-        if isinstance(publisher, str) and publisher.startswith('https://openalex.org/'):
-            # Пробуем получить имя из цепочки издателей
-            publisher_chain = article.get('publisher_chain', [])
-            if publisher_chain and len(publisher_chain) > 0:
-                publisher = publisher_chain[0]  # Берем первое имя из цепочки
-            else:
-                # Если цепочка пуста, оставляем как есть или ставим Unknown
-                publisher = 'Unknown Publisher'
+        if isinstance(publisher, str):
+            # Проверяем, является ли publisher ID (начинается с P или содержит openalex.org/P)
+            if publisher.startswith('P') and publisher[1:].isdigit() or 'openalex.org/P' in publisher:
+                # Пробуем получить имя из цепочки издателей
+                publisher_chain = article.get('publisher_chain', [])
+                if publisher_chain and len(publisher_chain) > 0:
+                    publisher = publisher_chain[0]  # Берем первое имя из цепочки
+                else:
+                    # Если цепочка пуста, оставляем как есть или ставим Unknown
+                    publisher = 'Unknown Publisher'
         
         journal = article.get('journal_name', 'Unknown Journal')
         # Ensure journal is not None
