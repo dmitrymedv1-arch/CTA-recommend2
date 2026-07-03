@@ -1874,6 +1874,11 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 authors = clean_text(article.get('authors', 'Authors not specified'))
                 story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Authors:</b> {authors}", authors_style))
                 
+                # Добавить вывод аффилиаций с разделением ●
+                affs = clean_text(article.get('affiliations_str', ''))
+                if affs:
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style))
+                
                 affs = clean_text(article.get('affiliations_str', ''))
                 if affs:
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style))
@@ -2552,6 +2557,11 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 
                 authors = clean_text(article.get('authors', 'Authors not specified'))
                 story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Authors:</b> {authors}", authors_style))
+                
+                # Добавить вывод аффилиаций с разделением ●
+                affs = clean_text(article.get('affiliations_str', ''))
+                if affs:
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style))
                 
                 # ADDED: Journal name
                 journal_name_article = clean_text(article.get('journal_name', ''))
