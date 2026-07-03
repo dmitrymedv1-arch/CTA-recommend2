@@ -2540,11 +2540,11 @@ def step_topic_selection():
                 st.rerun()
 
 def step_year_selection():
-    """Step 4: Select publication years"""
+    """Step 4: Select publication years - free text input"""
     st.markdown("""
     <div class="step-card">
         <h3 style="margin: 0; font-size: 1.3rem;">⏰ Step 4: Select Publication Years</h3>
-        <p style="margin: 5px 0; font-size: 0.9rem;">Choose the time period for analysis.</p>
+        <p style="margin: 5px 0; font-size: 0.9rem;">Enter the publication years for analysis (any format supported).</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -2561,34 +2561,74 @@ def step_year_selection():
     </div>
     """, unsafe_allow_html=True)
     
-    year_options = {
-        "2000": [2000],
-        "2010": [2010],
-        "2010-2020": list(range(2010, 2021)),
-        "2020": [2020],
-        "2023-2026": list(range(2023, 2027))
-    }
+    # Year input with examples
+    st.markdown("""
+    <div class="filter-section" style="background: rgba(255, 255, 255, 0.9); border-radius: 20px; padding: 20px; margin-bottom: 20px; border: 1px solid rgba(102, 126, 234, 0.2);">
+        <div class="filter-header" style="font-size: 1.1rem; font-weight: 600; color: #495057; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #667eea;">
+            📅 Publication Years
+        </div>
+    """, unsafe_allow_html=True)
     
-    selected_option = st.selectbox(
-        "Select Year Range",
-        options=list(year_options.keys()),
-        index=0,
-        help="Choose a predefined year range"
-    )
-    
-    years = year_options[selected_option]
-    
-    st.markdown(f"""
-    <div style="font-size: 0.85rem; color: #666; margin-top: 10px;">
-        Selected years: {', '.join(map(str, years))}
+    # Help text with examples
+    st.markdown("""
+    <div style="font-size: 0.9rem; color: #666; margin-bottom: 10px;">
+        <strong>Supported formats:</strong>
+    </div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2000</span>
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2010</span>
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2010-2020</span>
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2020</span>
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2023-2026</span>
+        <span style="background: #fff3e0; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem; border: 1px dashed #ff9800;">2005,2010-2015,2020</span>
+        <span style="background: #fff3e0; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem; border: 1px dashed #ff9800;">2015,2018-2020,2022-2024</span>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Text input for years
+    years_input = st.text_input(
+        "Enter publication years",
+        value=st.session_state.get('years_input', ''),
+        placeholder="Example: 2000 or 2010 or 2010-2020 or 2020 or 2023-2026 or 2015,2018-2020,2022",
+        help="Enter years in any format: single year (2020), range (2010-2020), or combination (2015,2018-2020,2022)"
+    )
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    # Parse and display preview of selected years
+    if years_input:
+        years = parse_year_filter(years_input)
+        if years:
+            years_str = format_year_filter_for_filename(years)
+            st.markdown(f"""
+            <div style="background: #e8f5e9; border-radius: 8px; padding: 12px; border-left: 4px solid #4CAF50; margin: 10px 0;">
+                <strong>✅ Selected years:</strong> {', '.join(map(str, years))}
+                <br><span style="font-size: 0.85rem; color: #666;">Total: {len(years)} years</span>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style="background: #ffebee; border-radius: 8px; padding: 12px; border-left: 4px solid #f44336; margin: 10px 0;">
+                <strong>❌ Invalid format:</strong> Please check your input.
+                <br><span style="font-size: 0.85rem; color: #666;">Example: 2000, 2010-2020, 2015,2018-2020,2022</span>
+            </div>
+            """, unsafe_allow_html=True)
     
     st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("📊 Generate Reports", type="primary", use_container_width=True):
+            if not years_input:
+                st.error("❌ Please enter at least one year.")
+                return
+            
+            years = parse_year_filter(years_input)
+            if not years:
+                st.error("❌ Invalid year format. Please check your input.")
+                return
+            
             st.session_state.selected_years = years
+            st.session_state.years_input = years_input
             st.session_state.current_step = 5
             st.rerun()
 
