@@ -37,8 +37,6 @@ import xlsxwriter
 from PIL import Image as PILImage
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-import nltk
-nltk.download('all')
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -53,7 +51,7 @@ st.set_page_config(
 )
 
 # ============================================================================
-# CUSTOM CSS DESIGN (from second code, adapted)
+# CUSTOM CSS DESIGN
 # ============================================================================
 
 st.markdown("""
@@ -371,7 +369,7 @@ CACHE_EXPIRY_DAYS = 30
 CACHE_DIR.mkdir(exist_ok=True)
 
 # ============================================================================
-# SQLITE CACHING (from first code)
+# SQLITE CACHING
 # ============================================================================
 
 def init_cache_db():
@@ -505,7 +503,84 @@ def clear_old_cache():
     conn.close()
 
 # ============================================================================
-# ASYNCIO + AIOHTTP CLIENT (from first code)
+# YEAR PARSING FUNCTIONS (ADDED)
+# ============================================================================
+
+def parse_year_filter(year_input: str) -> List[int]:
+    """
+    Parse year filter string.
+    Examples:
+    "2000" -> [2000]
+    "2010" -> [2010]
+    "2010-2020" -> [2010, 2011, 2012, ..., 2020]
+    "2020" -> [2020]
+    "2023-2026" -> [2023, 2024, 2025, 2026]
+    "2005,2010-2015,2020" -> [2005, 2010, 2011, 2012, 2013, 2014, 2015, 2020]
+    "2015,2018-2020,2022-2024" -> [2015, 2018, 2019, 2020, 2022, 2023, 2024]
+    """
+    years = set()
+    
+    if not year_input or year_input.strip() == "":
+        current_year = datetime.now().year
+        return [current_year - 2, current_year - 1, current_year]
+    
+    parts = year_input.split(',')
+    
+    for part in parts:
+        part = part.strip()
+        if '-' in part:
+            try:
+                start, end = part.split('-')
+                start_year = int(start.strip())
+                end_year = int(end.strip())
+                for year in range(start_year, end_year + 1):
+                    if 1900 <= year <= 2100:
+                        years.add(year)
+            except ValueError:
+                logger.warning(f"Could not parse range: {part}")
+        else:
+            try:
+                year = int(part)
+                if 1900 <= year <= 2100:
+                    years.add(year)
+            except ValueError:
+                logger.warning(f"Could not parse year: {part}")
+    
+    return sorted(list(years))
+
+def format_year_filter_for_filename(years: List[int]) -> str:
+    """
+    Format year list for filename.
+    [2021, 2023, 2024, 2025] -> "2021,2023-2025"
+    """
+    if not years:
+        return ""
+    
+    years_sorted = sorted(years)
+    ranges = []
+    start = years_sorted[0]
+    end = years_sorted[0]
+    
+    for i in range(1, len(years_sorted)):
+        if years_sorted[i] == end + 1:
+            end = years_sorted[i]
+        else:
+            if start == end:
+                ranges.append(str(start))
+            else:
+                ranges.append(f"{start}-{end}")
+            start = years_sorted[i]
+            end = years_sorted[i]
+    
+    if start == end:
+        ranges.append(str(start))
+    else:
+        ranges.append(f"{start}-{end}")
+    
+    return ",".join(ranges)
+
+# ============================================================================
+# ASYNCIO + AIOHTTP CLIENT
 # ============================================================================
 
 class OpenAlexAsyncClient:
@@ -720,7 +795,7 @@ class OpenAlexAsyncClient:
         return data
 
 # ============================================================================
-# SYNCHRONOUS WRAPPERS (from first code)
+# SYNCHRONOUS WRAPPERS
 # ============================================================================
 
 def run_async(coro):
@@ -805,7 +880,7 @@ def fetch_topic_stats_sync(topic_id: str) -> Optional[dict]:
     return run_async(fetch())
 
 # ============================================================================
-# HELPER FUNCTIONS (from first code)
+# HELPER FUNCTIONS
 # ============================================================================
 
 def normalize_word(word: str) -> str:
@@ -928,7 +1003,7 @@ def extract_numeric_from_doi(doi: str) -> int:
     return 0
 
 # ============================================================================
-# ENRICHMENT FUNCTIONS (enhanced for new requirements)
+# ENRICHMENT FUNCTIONS
 # ============================================================================
 
 def extract_all_authors_and_affiliations(work: dict) -> Tuple[List[str], List[str]]:
@@ -947,7 +1022,6 @@ def extract_all_authors_and_affiliations(work: dict) -> Tuple[List[str], List[st
             if author:
                 author_name = author.get('display_name', '')
                 if author_name:
-                    # Normalize Unicode
                     import unicodedata
                     author_name = unicodedata.normalize('NFC', str(author_name))
                     author_name = re.sub(r'[^a-zA-Zа-яА-ЯёЁ\s\.\,\-\'\(\)]', '', author_name)
@@ -1101,7 +1175,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     return enriched
 
 # ============================================================================
-# HIERARCHICAL GROUPING FUNCTIONS (from second code, adapted)
+# HIERARCHICAL GROUPING FUNCTIONS
 # ============================================================================
 
 def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[str, List[dict]]]:
@@ -1143,12 +1217,7 @@ def group_articles_by_country_affiliation(articles: List[dict]) -> Dict[str, Dic
         country = article.get('country', 'Unknown')
         affiliations = article.get('affiliations', ['Unknown Affiliation'])
         
-        # If article has multiple affiliations, it may appear in multiple countries
-        # For simplicity, use the first affiliation's country
-        # But we want to show all affiliations under the country
         for aff in affiliations:
-            # Use the country from the article (which is from first author)
-            # For more accuracy, we could extract per-affiliation country
             hierarchy[country][aff].append(article)
     
     # Sort alphabetically
@@ -1177,7 +1246,7 @@ def sort_articles_by_citations(articles: List[dict]) -> List[dict]:
     )
 
 # ============================================================================
-# PDF REPORT GENERATION FUNCTIONS (from second code, adapted)
+# PDF REPORT GENERATION FUNCTIONS
 # ============================================================================
 
 def register_russian_font():
@@ -1236,9 +1305,7 @@ def clean_text(text):
 def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, years: List[int],
                                       hierarchy: Dict, logo_path: str = None,
                                       report_title: str = "Report by Publisher & Journal") -> bytes:
-    """
-    Generate PDF report grouping articles by Publisher -> Journal.
-    """
+    """Generate PDF report grouping articles by Publisher -> Journal."""
     russian_font_name = register_russian_font()
     
     buffer = io.BytesIO()
@@ -1402,7 +1469,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                         for articles in [journal])
     total_publishers = len(hierarchy)
     
-    # ========== COVER PAGE ==========
+    # Cover Page
     story.append(Spacer(1, 2*cm))
     
     if logo_path and os.path.exists(logo_path):
@@ -1462,7 +1529,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     story.append(stats_table)
     story.append(PageBreak())
     
-    # ========== TABLE OF CONTENTS ==========
+    # Table of Contents
     story.append(Paragraph("Table of Contents", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -1480,7 +1547,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     
     story.append(PageBreak())
     
-    # ========== ARTICLES BY PUBLISHER -> JOURNAL ==========
+    # Articles by Publisher -> Journal
     for publisher, journals in hierarchy.items():
         publisher_articles = sum(len(articles) for articles in journals.values())
         anchor_id = f"publisher_{hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]}"
@@ -1550,7 +1617,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
         story.append(Spacer(1, 0.3*cm))
         story.append(PageBreak())
     
-    # ========== CONCLUSION ==========
+    # Conclusion
     story.append(Paragraph("Conclusion", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -1607,9 +1674,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
 def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[int],
                               articles: List[dict], logo_path: str = None,
                               report_title: str = "Report by Citations per Year") -> bytes:
-    """
-    Generate PDF report with articles sorted by citations per year.
-    """
+    """Generate PDF report with articles sorted by citations per year."""
     russian_font_name = register_russian_font()
     
     buffer = io.BytesIO()
@@ -1625,7 +1690,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     styles = getSampleStyleSheet()
     
-    # Define styles (same as previous)
+    # Define styles
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Normal'],
@@ -1729,7 +1794,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     total_articles = len(articles)
     
-    # ========== COVER PAGE ==========
+    # Cover Page
     story.append(Spacer(1, 2*cm))
     
     if logo_path and os.path.exists(logo_path):
@@ -1793,7 +1858,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     story.append(stats_table)
     story.append(PageBreak())
     
-    # ========== TABLE OF CONTENTS ==========
+    # Table of Contents
     story.append(Paragraph("Table of Contents", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -1811,7 +1876,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     story.append(PageBreak())
     
-    # ========== ARTICLES SORTED BY CITATIONS ==========
+    # Articles sorted by citations
     story.append(Paragraph("Articles by Citations per Year", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -1869,7 +1934,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     story.append(Spacer(1, 0.3*cm))
     story.append(PageBreak())
     
-    # ========== CONCLUSION ==========
+    # Conclusion
     story.append(Paragraph("Conclusion", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -1926,9 +1991,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
 def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, years: List[int],
                                        hierarchy: Dict, logo_path: str = None,
                                        report_title: str = "Report by Country & Affiliation") -> bytes:
-    """
-    Generate PDF report grouping articles by Country -> Affiliation.
-    """
+    """Generate PDF report grouping articles by Country -> Affiliation."""
     russian_font_name = register_russian_font()
     
     buffer = io.BytesIO()
@@ -1944,7 +2007,7 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     
     styles = getSampleStyleSheet()
     
-    # Define styles (same as previous)
+    # Define styles
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Normal'],
@@ -2091,7 +2154,7 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                         for articles in [affiliation])
     total_countries = len(hierarchy)
     
-    # ========== COVER PAGE ==========
+    # Cover Page
     story.append(Spacer(1, 2*cm))
     
     if logo_path and os.path.exists(logo_path):
@@ -2151,7 +2214,7 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     story.append(stats_table)
     story.append(PageBreak())
     
-    # ========== TABLE OF CONTENTS ==========
+    # Table of Contents
     story.append(Paragraph("Table of Contents", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -2169,7 +2232,7 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     
     story.append(PageBreak())
     
-    # ========== ARTICLES BY COUNTRY -> AFFILIATION ==========
+    # Articles by Country -> Affiliation
     for country, affiliations in hierarchy.items():
         country_articles = sum(len(articles) for articles in affiliations.values())
         anchor_id = f"country_{hashlib.md5(country.encode('utf-8')).hexdigest()[:8]}"
@@ -2235,7 +2298,7 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
         story.append(Spacer(1, 0.3*cm))
         story.append(PageBreak())
     
-    # ========== CONCLUSION ==========
+    # Conclusion
     story.append(Paragraph("Conclusion", title_style))
     story.append(Spacer(1, 0.5*cm))
     
@@ -2288,37 +2351,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     
     doc.build(story)
     return buffer.getvalue()
-
-# ============================================================================
-# FORMATTING HELPERS
-# ============================================================================
-
-def format_year_filter_for_filename(years: List[int]) -> str:
-    if not years:
-        return ""
-    
-    years_sorted = sorted(years)
-    ranges = []
-    start = years_sorted[0]
-    end = years_sorted[0]
-    
-    for i in range(1, len(years_sorted)):
-        if years_sorted[i] == end + 1:
-            end = years_sorted[i]
-        else:
-            if start == end:
-                ranges.append(str(start))
-            else:
-                ranges.append(f"{start}-{end}")
-            start = years_sorted[i]
-            end = years_sorted[i]
-    
-    if start == end:
-        ranges.append(str(start))
-    else:
-        ranges.append(f"{start}-{end}")
-    
-    return ",".join(ranges)
 
 def generate_journal_abbreviation(journal_name: str) -> str:
     if not journal_name:
@@ -2808,12 +2840,45 @@ def step_results():
         keys_to_clear = ['current_step', 'dois', 'works_data', 'topic_counter', 
                         'keyword_counter', 'successful', 'failed', 'selected_topic',
                         'selected_topic_id', 'selected_years', 'all_works', 
-                        'enriched_count']
+                        'enriched_count', 'years_input']
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
         st.session_state.current_step = 1
         st.rerun()
+
+# ============================================================================
+# STOPWORDS
+# ============================================================================
+
+import nltk
+nltk.download('stopwords', quiet=True)
+from nltk.corpus import stopwords
+
+COMMON_WORDS = {
+    'study', 'studies', 'research', 'paper', 'article', 'review', 'analysis', 'analyses',
+    'investigation', 'investigations', 'effect', 'effects', 'property', 'properties',
+    'performance', 'behavior', 'behaviour', 'characterization', 'characterisation',
+    'synthesis', 'development', 'preparation', 'fabrication', 'application', 'applications',
+    'method', 'methods', 'approach', 'approaches', 'result', 'results', 'discussion',
+    'conclusion', 'conclusions', 'introduction', 'experimental', 'experiment', 'experiments',
+    'measurement', 'measurements', 'observation', 'observations', 'technique', 'techniques',
+    'technology', 'technologies', 'material', 'materials', 'system', 'systems',
+    'process', 'processes', 'structure', 'structures', 'model', 'models',
+    'based', 'using', 'used', 'use', 'high', 'low', 'temperature', 'temperatures',
+    'pressure', 'different', 'various', 'several', 'important', 'significant',
+    'novel', 'new', 'recent', 'current', 'potential', 'possible', 'first',
+    'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth',
+    'tenth', 'good', 'better', 'best', 'poor', 'higher', 'lower', 'strong',
+    'weak', 'large', 'small', 'great', 'major', 'minor', 'main', 'primary',
+    'secondary', 'critical', 'essential', 'general', 'specific', 'special',
+    'particular', 'similar', 'different', 'various', 'several', 'multiple',
+    'numerous', 'common', 'unusual', 'typical', 'atypical', 'standard',
+    'advanced', 'basic', 'fundamental', 'theoretical', 'practical', 'experimental',
+    'computational', 'numerical', 'analytical', 'theoretical', 'practical'
+}
+
+ALL_STOPWORDS = set(stopwords.words('english')).union(COMMON_WORDS)
 
 # ============================================================================
 # MAIN FUNCTION
@@ -2833,7 +2898,7 @@ def main():
     </p>
     """, unsafe_allow_html=True)
     
-    # Progress bar (simplified)
+    # Progress bar
     steps = ["Input", "Analysis", "Topic", "Years", "Reports"]
     current_step = st.session_state.current_step
     progress = (current_step - 1) / 4
@@ -2870,40 +2935,6 @@ def main():
         <p style="font-size: 0.7rem; color: #aaa;">CTA Article Recommender Pro*2 with multi-report generation</p>
     </div>
     """, unsafe_allow_html=True)
-
-# ============================================================================
-# STOPWORDS (from first code)
-# ============================================================================
-
-# Initialize stopwords
-import nltk
-nltk.download('stopwords', quiet=True)
-from nltk.corpus import stopwords
-
-COMMON_WORDS = {
-    'study', 'studies', 'research', 'paper', 'article', 'review', 'analysis', 'analyses',
-    'investigation', 'investigations', 'effect', 'effects', 'property', 'properties',
-    'performance', 'behavior', 'behaviour', 'characterization', 'characterisation',
-    'synthesis', 'development', 'preparation', 'fabrication', 'application', 'applications',
-    'method', 'methods', 'approach', 'approaches', 'result', 'results', 'discussion',
-    'conclusion', 'conclusions', 'introduction', 'experimental', 'experiment', 'experiments',
-    'measurement', 'measurements', 'observation', 'observations', 'technique', 'techniques',
-    'technology', 'technologies', 'material', 'materials', 'system', 'systems',
-    'process', 'processes', 'structure', 'structures', 'model', 'models',
-    'based', 'using', 'used', 'use', 'high', 'low', 'temperature', 'temperatures',
-    'pressure', 'different', 'various', 'several', 'important', 'significant',
-    'novel', 'new', 'recent', 'current', 'potential', 'possible', 'first',
-    'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth',
-    'tenth', 'good', 'better', 'best', 'poor', 'higher', 'lower', 'strong',
-    'weak', 'large', 'small', 'great', 'major', 'minor', 'main', 'primary',
-    'secondary', 'critical', 'essential', 'general', 'specific', 'special',
-    'particular', 'similar', 'different', 'various', 'several', 'multiple',
-    'numerous', 'common', 'unusual', 'typical', 'atypical', 'standard',
-    'advanced', 'basic', 'fundamental', 'theoretical', 'practical', 'experimental',
-    'computational', 'numerical', 'analytical', 'theoretical', 'practical'
-}
-
-ALL_STOPWORDS = set(stopwords.words('english')).union(COMMON_WORDS)
 
 # ============================================================================
 # APPLICATION ENTRY POINT
