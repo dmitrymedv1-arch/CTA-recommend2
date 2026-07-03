@@ -1320,6 +1320,17 @@ def clean_text(text):
     text = re.sub(allowed_pattern, '', text)
     return text
 
+def clean_doi_url(url):
+    if not url:
+        return ""
+    # Экранируем специальные символы для XML
+    url = url.replace('&', '&amp;')
+    url = url.replace('"', '&quot;')
+    url = url.replace("'", '&apos;')
+    url = url.replace('<', '&lt;')
+    url = url.replace('>', '&gt;')
+    return url
+
 def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, years: List[int],
                                       hierarchy: Dict, logo_path: str = None,
                                       report_title: str = "Report by Publisher & Journal") -> bytes:
