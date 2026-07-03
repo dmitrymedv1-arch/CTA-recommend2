@@ -1115,14 +1115,21 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     # Get journal and publisher info
     journal_name = ''
     publisher = ''
+    publisher_chain = []
     primary_location = work.get('primary_location')
     if primary_location:
         source = primary_location.get('source', {})
         if source:
             journal_name = source.get('display_name', '') or ''
-            publisher = source.get('publisher', '') or ''
+            # Получаем издателя
+            publisher = source.get('host_organization_name', '') or ''
+            if not publisher:
+                publisher = source.get('publisher', '') or ''
             if not publisher:
                 publisher = source.get('host_organization', '') or ''
+            
+            # Получаем цепочку издателей
+            publisher_chain = source.get('host_organization_lineage_names', [])
     
     # Extract topic info
     primary_topic = work.get('primary_topic', {})
@@ -1162,6 +1169,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         'affiliations_str': affiliations_str,
         'journal_name': journal_name,
         'publisher': publisher,
+        'publisher_chain': publisher_chain,
         'volume': volume,
         'issue': issue,
         'pages': pages_str,
