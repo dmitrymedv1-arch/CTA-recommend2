@@ -37,6 +37,8 @@ import xlsxwriter
 from PIL import Image as PILImage
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+import nltk
+nltk.download('all')
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
