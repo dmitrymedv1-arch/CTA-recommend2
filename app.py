@@ -1619,6 +1619,10 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     """Generate PDF report grouping articles by Publisher -> Journal."""
     russian_font_name = register_russian_font()
     
+    # Получаем информацию о фильтре из session_state
+    search_query = st.session_state.get('search_query', '')
+    has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
+    
     buffer = io.BytesIO()
     
     doc = SimpleDocTemplate(
@@ -1808,10 +1812,20 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     story.append(Paragraph(f"Publication period: {years_str}", subtitle_style))
     story.append(Spacer(1, 1.5*cm))
     
-    intro_text = f"""
-    This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-    grouped by Publisher and Journal.
-    """
+    # Формируем intro_text с учетом фильтра
+    if search_query and has_filter:
+        intro_text = f"""
+        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
+        grouped by Publisher and Journal.
+        
+        <b>Applied filter:</b> «{clean_text(search_query)}»
+        """
+    else:
+        intro_text = f"""
+        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
+        grouped by Publisher and Journal.
+        """
+    
     story.append(Paragraph(intro_text, intro_style))
     story.append(Spacer(1, 1*cm))
     
@@ -1983,6 +1997,10 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     """Generate PDF report with articles sorted by citations per year."""
     russian_font_name = register_russian_font()
     
+    # Получаем информацию о фильтре из session_state
+    search_query = st.session_state.get('search_query', '')
+    has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
+    
     buffer = io.BytesIO()
     
     doc = SimpleDocTemplate(
@@ -2131,12 +2149,24 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     avg_citations = sum(a.get('citations_per_year', 0) for a in articles) / total_articles if total_articles > 0 else 0
     
-    intro_text = f"""
-    This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-    sorted by citations per year (descending).
+    # Формируем intro_text с учетом фильтра
+    if search_query and has_filter:
+        intro_text = f"""
+        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
+        sorted by citations per year (descending).
+        
+        Average citations per year: {avg_citations:.1f}
+        
+        <b>Applied filter:</b> «{clean_text(search_query)}»
+        """
+    else:
+        intro_text = f"""
+        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
+        sorted by citations per year (descending).
+        
+        Average citations per year: {avg_citations:.1f}
+        """
     
-    Average citations per year: {avg_citations:.1f}
-    """
     story.append(Paragraph(intro_text, intro_style))
     story.append(Spacer(1, 1*cm))
     
@@ -2299,6 +2329,10 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                                        report_title: str = "Report by Country & Affiliation") -> bytes:
     """Generate PDF report grouping articles by Country -> Affiliation."""
     russian_font_name = register_russian_font()
+    
+    # Получаем информацию о фильтре из session_state
+    search_query = st.session_state.get('search_query', '')
+    has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
     
     buffer = io.BytesIO()
     
@@ -2489,10 +2523,20 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     story.append(Paragraph(f"Publication period: {years_str}", subtitle_style))
     story.append(Spacer(1, 1.5*cm))
     
-    intro_text = f"""
-    This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-    grouped by Country and Affiliation.
-    """
+    # Формируем intro_text с учетом фильтра
+    if search_query and has_filter:
+        intro_text = f"""
+        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
+        grouped by Country and Affiliation.
+        
+        <b>Applied filter:</b> «{clean_text(search_query)}»
+        """
+    else:
+        intro_text = f"""
+        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
+        grouped by Country and Affiliation.
+        """
+    
     story.append(Paragraph(intro_text, intro_style))
     story.append(Spacer(1, 1*cm))
     
