@@ -3677,7 +3677,7 @@ def main():
         st.session_state.current_step = 1
     
     # Header
-    logo_path = find_logo_file()  # или просто "logo.png"
+    logo_path = "logo.png"
     
     if logo_path and os.path.exists(logo_path):
         # Показываем логотип на треть страницы
