@@ -3677,11 +3677,16 @@ def main():
         st.session_state.current_step = 1
     
     # Header
+    import base64
+    
     logo_path = "logo.png"
-    if logo_path and os.path.exists(logo_path):
+    if os.path.exists(logo_path):
+        with open(logo_path, "rb") as f:
+            img_data = base64.b64encode(f.read()).decode()
+        
         st.markdown(f"""
         <div style="display: flex; justify-content: center; align-items: center; padding: 20px 0; margin-bottom: 10px;">
-            <img src="data:image/png;base64,{get_image_base64(logo_path)}" 
+            <img src="data:image/png;base64,{img_data}" 
                  style="width: 33%; max-width: 400px; height: auto; object-fit: contain;">
         </div>
         """, unsafe_allow_html=True)
