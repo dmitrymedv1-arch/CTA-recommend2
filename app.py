@@ -1104,9 +1104,9 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     authors, affiliations = extract_all_authors_and_affiliations(work)
     authors_str = ', '.join(authors) if authors else 'Authors not specified'
     
-    # Join all affiliations with bullet separator (●)
+    # Join all affiliations with slash separator
     if affiliations:
-        affiliations_str = ' ● '.join(affiliations)
+        affiliations_str = ' / '.join(affiliations)
     else:
         affiliations_str = 'No affiliations specified'
     
@@ -1177,7 +1177,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         'authors': authors_str,
         'authors_list': authors,
         'affiliations': affiliations,
-        'affiliations_str': affiliations_str,  # Now with ● separator
+        'affiliations_str': affiliations_str,  # Now with / separator
         'journal_name': journal_name,
         'publisher': publisher,
         'publisher_chain': publisher_chain,
@@ -1585,6 +1585,9 @@ def register_russian_font():
     return russian_font_name
 
 def clean_text(text):
+    """
+    Clean text for PDF display, preserving allowed special characters including slash.
+    """
     if text is None:
         return ""
     if not text:
@@ -1595,7 +1598,8 @@ def clean_text(text):
     text = unicodedata.normalize('NFC', str(text))
     text = re.sub(r'<[^>]+>', '', text)
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    allowed_pattern = r'[^a-zA-Zа-яА-ЯёЁ\s\.\,\-\'\(\)\d]'
+    # Allow: letters (Latin and Cyrillic), spaces, dots, commas, hyphens, apostrophes, parentheses, digits, and slash
+    allowed_pattern = r'[^a-zA-Zа-яА-ЯёЁ\s\.\,\-\'\(\)\d\/]'
     text = re.sub(allowed_pattern, '', text)
     return text
 
@@ -1874,9 +1878,9 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 authors = clean_text(article.get('authors', 'Authors not specified'))
                 story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Authors:</b> {authors}", authors_style))
                 
-                # Добавить вывод аффилиаций с разделением ●
+                # Single output of affiliations with proper separator
                 affs = clean_text(article.get('affiliations_str', ''))
-                if affs:
+                if affs and affs != 'No affiliations specified':
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style))
                 
                 year = article.get('publication_year', '')
@@ -2188,8 +2192,9 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         authors = clean_text(article.get('authors', 'Authors not specified'))
         story.append(Paragraph(f"<b>Authors:</b> {authors}", authors_style))
         
+        # Single output of affiliations with proper separator
         affs = clean_text(article.get('affiliations_str', ''))
-        if affs:
+        if affs and affs != 'No affiliations specified':
             story.append(Paragraph(f"<b>Affiliations:</b> {affs}", meta_style))
         
         # ADDED: Journal name
@@ -2554,9 +2559,9 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 authors = clean_text(article.get('authors', 'Authors not specified'))
                 story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Authors:</b> {authors}", authors_style))
                 
-                # Добавить вывод аффилиаций с разделением ●
+                # Single output of affiliations with proper separator
                 affs = clean_text(article.get('affiliations_str', ''))
-                if affs:
+                if affs and affs != 'No affiliations specified':
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style))
                 
                 # ADDED: Journal name
