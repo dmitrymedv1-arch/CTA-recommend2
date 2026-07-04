@@ -1104,7 +1104,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     authors, affiliations = extract_all_authors_and_affiliations(work)
     authors_str = ', '.join(authors) if authors else 'Authors not specified'
     
-    # Join all affiliations with ● separator
+    # Join all affiliations with bullet separator (●)
     if affiliations:
         affiliations_str = ' ● '.join(affiliations)
     else:
@@ -1177,7 +1177,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         'authors': authors_str,
         'authors_list': authors,
         'affiliations': affiliations,
-        'affiliations_str': affiliations_str,
+        'affiliations_str': affiliations_str,  # Now with ● separator
         'journal_name': journal_name,
         'publisher': publisher,
         'publisher_chain': publisher_chain,
@@ -1875,10 +1875,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Authors:</b> {authors}", authors_style))
                 
                 # Добавить вывод аффилиаций с разделением ●
-                affs = clean_text(article.get('affiliations_str', ''))
-                if affs:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style))
-                
                 affs = clean_text(article.get('affiliations_str', ''))
                 if affs:
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style))
