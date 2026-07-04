@@ -3025,6 +3025,28 @@ def step_year_selection():
             """, unsafe_allow_html=True)
     
     st.markdown("---")
+    col_reset1, col_reset2, col_reset3 = st.columns([1, 2, 1])
+    with col_reset2:
+        if st.button("🔄 Reset Cached Data (Clear Old Results)", use_container_width=True, type="secondary"):
+            # Очищаем все кэшированные данные
+            if 'all_works' in st.session_state:
+                del st.session_state.all_works
+            if 'enriched_count' in st.session_state:
+                del st.session_state.enriched_count
+            if 'pdf_cache' in st.session_state:
+                del st.session_state.pdf_cache
+            if 'all_reports_generated' in st.session_state:
+                del st.session_state.all_reports_generated
+            if 'filtered_articles' in st.session_state:
+                del st.session_state.filtered_articles
+            if 'search_query' in st.session_state:
+                del st.session_state.search_query
+            if 'search_results_count' in st.session_state:
+                del st.session_state.search_results_count
+            st.success("✅ Cache cleared! You can now select new years.")
+            st.rerun()
+    
+    st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("📊 Generate Reports", type="primary", use_container_width=True):
@@ -3036,6 +3058,23 @@ def step_year_selection():
             if not years:
                 st.error("❌ Invalid year format. Please check your input.")
                 return
+            
+            # Очищаем кэшированные данные при изменении года
+            if 'selected_years' in st.session_state and st.session_state.selected_years != years:
+                if 'all_works' in st.session_state:
+                    del st.session_state.all_works
+                if 'enriched_count' in st.session_state:
+                    del st.session_state.enriched_count
+                if 'pdf_cache' in st.session_state:
+                    del st.session_state.pdf_cache
+                if 'all_reports_generated' in st.session_state:
+                    del st.session_state.all_reports_generated
+                if 'filtered_articles' in st.session_state:
+                    del st.session_state.filtered_articles
+                if 'search_query' in st.session_state:
+                    del st.session_state.search_query
+                if 'search_results_count' in st.session_state:
+                    del st.session_state.search_results_count
             
             st.session_state.selected_years = years
             st.session_state.years_input = years_input
