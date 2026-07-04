@@ -1790,8 +1790,8 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
             pil_img = PILImage.open(logo_path)
             original_width, original_height = pil_img.size
             pil_img.close()
-            max_width = 150
-            max_height = 125
+            max_width = 300
+            max_height = 250
             width_ratio = max_width / original_width
             height_ratio = max_height / original_height
             scale_ratio = min(width_ratio, height_ratio)
