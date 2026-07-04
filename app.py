@@ -3677,12 +3677,21 @@ def main():
         st.session_state.current_step = 1
     
     # Header
-    st.markdown("""
-    <h1 class="main-header">🔬 CTA Article Recommender Pro*2</h1>
-    <p style="font-size: 1rem; color: #666; margin-bottom: 1.5rem;">
-    Discover and analyze research articles by topic with advanced reporting
-    </p>
-    """, unsafe_allow_html=True)
+    logo_path = find_logo_file()  # или просто "logo.png"
+    
+    if logo_path and os.path.exists(logo_path):
+        # Показываем логотип на треть страницы
+        st.markdown(f"""
+        <div style="display: flex; justify-content: center; align-items: center; padding: 20px 0; margin-bottom: 10px;">
+            <img src="data:image/png;base64,{get_image_base64(logo_path)}" 
+                 style="width: 33%; max-width: 400px; height: auto; object-fit: contain;">
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        # Fallback если логотип не найден - показываем просто текст
+        st.markdown("""
+        <h1 class="main-header" style="text-align: center; font-size: 2rem;">🔬 CTA Article Recommender</h1>
+        """, unsafe_allow_html=True)
     
     # Progress bar
     steps = ["Input", "Analysis", "Topic", "Years", "Reports", "Search"]
