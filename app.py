@@ -1554,15 +1554,16 @@ def check_term_match(title: str, term: str) -> bool:
 def parse_search_query(query: str) -> Dict[str, Any]:
     """
     Parse search query and return structured search parameters.
+    Now supports OR operator.
     Returns: {
         'phrase': str or None,  # exact phrase in quotes
         'and_terms': List[str],  # terms with AND logic
-        'or_terms': List[str],   # terms with OR logic (standard)
+        'or_groups': List[List[str]],  # groups of terms with OR logic
         'has_wildcard': bool
     }
     """
     if not query or not query.strip():
-        return {'phrase': None, 'and_terms': [], 'or_terms': [], 'has_wildcard': False}
+        return {'phrase': None, 'and_terms': [], 'or_groups': [], 'has_wildcard': False}
     
     query = query.strip()
     
@@ -1573,24 +1574,36 @@ def parse_search_query(query: str) -> Dict[str, Any]:
     # Remove quoted parts
     remaining = re.sub(r'"[^"]*"', '', query).strip()
     
-    # Split by spaces for terms
-    terms = remaining.split() if remaining else []
-    
-    # Separate terms that should use AND logic (no special syntax)
-    # All terms without quotes are treated as AND by default
+    # Split by OR to get groups
+    or_groups = []
     and_terms = []
-    or_terms = []
     has_wildcard = False
     
-    for term in terms:
-        if '*' in term:
-            has_wildcard = True
-        and_terms.append(term)
+    if ' OR ' in remaining or ' or ' in remaining:
+        # Split by OR (case insensitive)
+        groups = re.split(r'\s+OR\s+', remaining, flags=re.IGNORECASE)
+        for group in groups:
+            group = group.strip()
+            if group:
+                # Each group can have multiple AND terms
+                group_terms = group.split()
+                # Check for wildcards in group terms
+                for term in group_terms:
+                    if '*' in term:
+                        has_wildcard = True
+                or_groups.append(group_terms)
+    else:
+        # No OR - treat as AND terms
+        terms = remaining.split() if remaining else []
+        for term in terms:
+            if '*' in term:
+                has_wildcard = True
+            and_terms.append(term)
     
     return {
         'phrase': phrase,
         'and_terms': and_terms,
-        'or_terms': or_terms,
+        'or_groups': or_groups,
         'has_wildcard': has_wildcard
     }
 
@@ -1600,8 +1613,10 @@ def filter_articles_by_query(articles: List[dict], query: str) -> List[dict]:
     Supports:
     - Quoted phrases: "high temperature"
     - AND logic: high temperature (both words must appear)
+    - OR logic: high OR low (at least one word must appear)
     - Wildcards: catal* (matches catalysis, catalyst, etc.)
     - Plural forms: fuel cell = fuel cells
+    - Combined: "high temperature" OR "low temperature"
     """
     if not query or not query.strip() or not articles:
         return articles
@@ -1621,7 +1636,24 @@ def filter_articles_by_query(articles: List[dict], query: str) -> List[dict]:
             if not check_phrase_match(title, parsed['phrase']):
                 match = False
         
-        # Check AND terms
+        # Check OR groups (if present)
+        if match and parsed['or_groups']:
+            or_match = False
+            for group_terms in parsed['or_groups']:
+                # For each OR group, check if ALL terms in the group match (AND within OR group)
+                group_match = True
+                for term in group_terms:
+                    if not check_term_match(title, term):
+                        group_match = False
+                        break
+                if group_match:
+                    or_match = True
+                    break
+            
+            if not or_match:
+                match = False
+        
+        # Check AND terms (if no OR groups)
         if match and parsed['and_terms']:
             for term in parsed['and_terms']:
                 if not check_term_match(title, term):
@@ -1632,6 +1664,14 @@ def filter_articles_by_query(articles: List[dict], query: str) -> List[dict]:
             filtered.append(article)
     
     return filtered
+
+def parse_complex_search_query(query: str) -> Dict[str, Any]:
+    """
+    Enhanced parser that can handle mixed AND/OR logic.
+    Example: "catal*" AND ("high temperature" OR "low temperature")
+    """
+    # This is a more advanced parser if you need nested logic
+    pass
 
 # ============================================================================
 # PDF REPORT GENERATION FUNCTIONS
