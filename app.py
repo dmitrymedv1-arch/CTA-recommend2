@@ -2064,38 +2064,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     story.append(Paragraph(conclusion_text, conclusion_style))
     story.append(Spacer(1, 1*cm))
     
-    try:
-        possible_paths = [
-            "logo.png",
-            "./logo.png",
-            "app/logo.png",
-            os.path.join(os.path.dirname(__file__), "logo.png"),
-            os.path.join(os.getcwd(), "logo.png")
-        ]
-        
-        app_logo_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                app_logo_path = path
-                break
-        
-        if app_logo_path:
-            from PIL import Image as PILImage
-            pil_img = PILImage.open(app_logo_path)
-            pil_img.verify()
-            pil_img.close()
-            app_logo = Image(app_logo_path, width=200, height=200)
-            app_logo.hAlign = 'CENTER'
-            story.append(app_logo)
-            story.append(Spacer(1, 0.2*cm))
-        else:
-            story.append(Paragraph("📚", ParagraphStyle('LogoEmoji', parent=styles['Normal'], fontSize=30, textColor=colors.HexColor('#667eea'), alignment=TA_CENTER)))
-            story.append(Spacer(1, 0.2*cm))
-    except Exception as e:
-        logger.error(f"Could not load app logo: {e}")
-        story.append(Paragraph("📚", ParagraphStyle('LogoEmoji', parent=styles['Normal'], fontSize=30, textColor=colors.HexColor('#667eea'), alignment=TA_CENTER)))
-        story.append(Spacer(1, 0.2*cm))
-    
     story.append(Paragraph(f"© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d')}", footer_style))
     story.append(Paragraph("Report generated using CTA Article Recommender Pro*2", footer_style))
     
@@ -2460,38 +2428,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     story.append(Paragraph(conclusion_text, conclusion_style))
     story.append(Spacer(1, 1*cm))
-    
-    try:
-        possible_paths = [
-            "logo.png",
-            "./logo.png",
-            "app/logo.png",
-            os.path.join(os.path.dirname(__file__), "logo.png"),
-            os.path.join(os.getcwd(), "logo.png")
-        ]
-        
-        app_logo_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                app_logo_path = path
-                break
-        
-        if app_logo_path:
-            from PIL import Image as PILImage
-            pil_img = PILImage.open(app_logo_path)
-            pil_img.verify()
-            pil_img.close()
-            app_logo = Image(app_logo_path, width=200, height=200)
-            app_logo.hAlign = 'CENTER'
-            story.append(app_logo)
-            story.append(Spacer(1, 0.2*cm))
-        else:
-            story.append(Paragraph("📚", ParagraphStyle('LogoEmoji', parent=styles['Normal'], fontSize=30, textColor=colors.HexColor('#667eea'), alignment=TA_CENTER)))
-            story.append(Spacer(1, 0.2*cm))
-    except Exception as e:
-        logger.error(f"Could not load app logo: {e}")
-        story.append(Paragraph("📚", ParagraphStyle('LogoEmoji', parent=styles['Normal'], fontSize=30, textColor=colors.HexColor('#667eea'), alignment=TA_CENTER)))
-        story.append(Spacer(1, 0.2*cm))
     
     story.append(Paragraph(f"© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d')}", footer_style))
     story.append(Paragraph("Report generated using CTA Article Recommender Pro*2", footer_style))
@@ -2907,38 +2843,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     
     story.append(Paragraph(conclusion_text, conclusion_style))
     story.append(Spacer(1, 1*cm))
-    
-    try:
-        possible_paths = [
-            "logo.png",
-            "./logo.png",
-            "app/logo.png",
-            os.path.join(os.path.dirname(__file__), "logo.png"),
-            os.path.join(os.getcwd(), "logo.png")
-        ]
-        
-        app_logo_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                app_logo_path = path
-                break
-        
-        if app_logo_path:
-            from PIL import Image as PILImage
-            pil_img = PILImage.open(app_logo_path)
-            pil_img.verify()
-            pil_img.close()
-            app_logo = Image(app_logo_path, width=200, height=200)
-            app_logo.hAlign = 'CENTER'
-            story.append(app_logo)
-            story.append(Spacer(1, 0.2*cm))
-        else:
-            story.append(Paragraph("📚", ParagraphStyle('LogoEmoji', parent=styles['Normal'], fontSize=30, textColor=colors.HexColor('#667eea'), alignment=TA_CENTER)))
-            story.append(Spacer(1, 0.2*cm))
-    except Exception as e:
-        logger.error(f"Could not load app logo: {e}")
-        story.append(Paragraph("📚", ParagraphStyle('LogoEmoji', parent=styles['Normal'], fontSize=30, textColor=colors.HexColor('#667eea'), alignment=TA_CENTER)))
-        story.append(Spacer(1, 0.2*cm))
     
     story.append(Paragraph(f"© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d')}", footer_style))
     story.append(Paragraph("Report generated using CTA Article Recommender Pro*2", footer_style))
