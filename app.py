@@ -3759,29 +3759,39 @@ def step_advanced_search():
         <div class="filter-header" style="font-size: 1.1rem; font-weight: 600; color: #495057; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #667eea;">
             🔍 Search Syntax
         </div>
-        
-        <div style="font-size: 0.9rem; color: #666; margin-bottom: 10px;">
-            <strong>Supported syntax:</strong>
-        </div>
-        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; font-size: 0.85rem;">
-            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #667eea;">
-                &lt;code&gt;"high temperature"&lt;/code&gt; — Exact phrase match
-            </div>
-            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #27ae60;">
-                &lt;code&gt;high temperature&lt;/code&gt; — Both words must appear (AND logic)
-            </div>
-            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e67e22;">
-                &lt;code&gt;catal*&lt;/code&gt; — Wildcard: matches catalysis, catalyst, catalytic, etc.
-            </div>
-            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #8e44ad;">
-                &lt;code&gt;fuel cell&lt;/code&gt; — Automatically matches "fuel cells" (plural support)
-            </div>
-            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e74c3c;">
-                &lt;code&gt;"high temperature" catalysis*&lt;/code&gt; — Combined: exact phrase AND wildcard
-            </div>
-        </div>
     </div>
     """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div style="font-size: 0.9rem; color: #666; margin-bottom: 10px;">
+        <strong>Supported syntax:</strong>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.markdown("""
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #667eea; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">"high temperature"</code> — Exact phrase match
+        </div>
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #27ae60; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">high temperature</code> — Both words must appear (AND logic)
+        </div>
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e67e22; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">catal*</code> — Wildcard: matches catalysis, catalyst, catalytic, etc.
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #8e44ad; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">fuel cell</code> — Automatically matches "fuel cells" (plural support)
+        </div>
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e74c3c; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">"high temperature" catalysis*</code> — Combined: exact phrase AND wildcard
+        </div>
+        """, unsafe_allow_html=True)
     
     # Search input
     search_query = st.text_input(
