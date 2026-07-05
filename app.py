@@ -3765,19 +3765,19 @@ def step_advanced_search():
         </div>
         <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; font-size: 0.85rem;">
             <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #667eea;">
-                <code>"high temperature"</code> — Exact phrase match
+                &lt;code&gt;"high temperature"&lt;/code&gt; — Exact phrase match
             </div>
             <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #27ae60;">
-                <code>high temperature</code> — Both words must appear (AND logic)
+                &lt;code&gt;high temperature&lt;/code&gt; — Both words must appear (AND logic)
             </div>
             <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e67e22;">
-                <code>catal*</code> — Wildcard: matches catalysis, catalyst, catalytic, etc.
+                &lt;code&gt;catal*&lt;/code&gt; — Wildcard: matches catalysis, catalyst, catalytic, etc.
             </div>
             <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #8e44ad;">
-                <code>fuel cell</code> — Automatically matches "fuel cells" (plural support)
+                &lt;code&gt;fuel cell&lt;/code&gt; — Automatically matches "fuel cells" (plural support)
             </div>
             <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e74c3c;">
-                <code>"high temperature" catalysis*</code> — Combined: exact phrase AND wildcard
+                &lt;code&gt;"high temperature" catalysis*&lt;/code&gt; — Combined: exact phrase AND wildcard
             </div>
         </div>
     </div>
