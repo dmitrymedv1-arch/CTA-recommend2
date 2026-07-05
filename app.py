@@ -1087,6 +1087,38 @@ def get_oa_status(work: dict) -> str:
             return 'Open Access'
     return 'Closed Access'
 
+def get_publication_badge(work: dict) -> Tuple[str, str, str]:
+    """
+    Determine publication type badge color, icon, and label.
+    Returns: (color_hex, icon, label)
+    """
+    pub_type = work.get('type', '').lower()
+    
+    # Get source type from primary location
+    primary_location = work.get('primary_location', {})
+    source = primary_location.get('source', {})
+    source_type = source.get('type', '').lower() if source else ''
+    raw_type = primary_location.get('raw_type', '').lower() if primary_location else ''
+    
+    # Check for preprint/repository
+    if pub_type == 'preprint' or source_type == 'repository' or 'preprint' in raw_type:
+        return '#9b59b6', '📋', 'Preprint'
+    
+    # Check for book/chapter
+    if pub_type in ['book-chapter', 'book', 'edited-book'] or source_type == 'book series':
+        return '#e67e22', '📚', 'Book/Chapter'
+    
+    # Check for conference proceedings
+    if pub_type == 'proceedings-article' or 'proceedings' in pub_type or 'conference' in raw_type:
+        return '#2980b9', '🎤', 'Conference'
+    
+    # Check for journal article (default)
+    if pub_type == 'journal-article' or source_type == 'journal' or not pub_type:
+        return '#27ae60', '📄', 'Article'
+    
+    # Other/unknown
+    return '#7f8c8d', '📎', pub_type.capitalize() if pub_type else 'Other'
+
 def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     """
     Enrich article data with complete information including all fields.
@@ -1165,6 +1197,14 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     # OA status
     oa_status = get_oa_status(work)
     
+    # Get publication type and source type
+    pub_type = work.get('type', '')
+    source_type = ''
+    if primary_location:
+        source = primary_location.get('source', {})
+        if source:
+            source_type = source.get('type', '')
+    
     enriched = {
         'doi': doi_clean,
         'doi_url': f"https://doi.org/{doi_clean}" if doi_clean else '',
@@ -1177,7 +1217,7 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         'authors': authors_str,
         'authors_list': authors,
         'affiliations': affiliations,
-        'affiliations_str': affiliations_str,  # Now with / separator
+        'affiliations_str': affiliations_str,
         'journal_name': journal_name,
         'publisher': publisher,
         'publisher_chain': publisher_chain,
@@ -1187,7 +1227,8 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         'primary_topic': topic_name,
         'topic_id': topic_id,
         'oa_status': oa_status,
-        'type': work.get('type', ''),
+        'type': pub_type,
+        'source_type': source_type,
         'country': extract_country_from_work(work)
     }
     
@@ -1296,12 +1337,18 @@ def group_articles_by_country_affiliation(articles: List[dict]) -> Dict[str, Dic
 
 def sort_articles_by_citations(articles: List[dict], sort_by: str = 'citations_per_year') -> List[dict]:
     """
-    Sort all articles by citations per year or total citations (descending).
+    Sort all articles by citations per year or total citations or publication date (descending).
     """
     if sort_by == 'total_citations':
         return sorted(
             articles,
             key=lambda x: x.get('cited_by_count', 0) if x.get('cited_by_count') is not None else 0,
+            reverse=True
+        )
+    elif sort_by == 'publication_date':
+        return sorted(
+            articles,
+            key=lambda x: x.get('publication_year', 0) if x.get('publication_year') is not None else 0,
             reverse=True
         )
     else:  # default: citations_per_year
@@ -1697,11 +1744,56 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
         fontName=russian_font_name
     )
     
-    meta_style = ParagraphStyle(
-        'MetaStyle',
+    # Base meta style (green - default for articles)
+    meta_style_default = ParagraphStyle(
+        'MetaDefault',
         parent=styles['Normal'],
         fontSize=8,
-        textColor=colors.HexColor('#7F8C8D'),
+        textColor=colors.HexColor('#27ae60'),
+        spaceAfter=2,
+        leftIndent=40,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for preprints (purple)
+    meta_style_preprint = ParagraphStyle(
+        'MetaPreprint',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#9b59b6'),
+        spaceAfter=2,
+        leftIndent=40,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for books/chapters (orange)
+    meta_style_book = ParagraphStyle(
+        'MetaBook',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#e67e22'),
+        spaceAfter=2,
+        leftIndent=40,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for conference proceedings (blue)
+    meta_style_conference = ParagraphStyle(
+        'MetaConference',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#2980b9'),
+        spaceAfter=2,
+        leftIndent=40,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for other types (gray)
+    meta_style_other = ParagraphStyle(
+        'MetaOther',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#7f8c8d'),
         spaceAfter=2,
         leftIndent=40,
         fontName=russian_font_name
@@ -1895,7 +1987,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 # Single output of affiliations with proper separator
                 affs = clean_text(article.get('affiliations_str', ''))
                 if affs and affs != 'No affiliations specified':
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style_default))
                 
                 year = article.get('publication_year', '')
                 volume = article.get('volume', '')
@@ -1913,7 +2005,26 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                     meta_parts.append(f"pp. {pages}")
                 
                 if meta_parts:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{', '.join(meta_parts)}", meta_style))
+                    # Get publication type for styling
+                    badge_color, badge_icon, type_label = get_publication_badge(article)
+                    
+                    # Choose appropriate style based on type
+                    if type_label == 'Preprint':
+                        meta_style = meta_style_preprint
+                    elif type_label == 'Book/Chapter':
+                        meta_style = meta_style_book
+                    elif type_label == 'Conference':
+                        meta_style = meta_style_conference
+                    elif type_label == 'Article':
+                        meta_style = meta_style_default
+                    else:
+                        meta_style = meta_style_other
+                    
+                    # Display type badge with meta information
+                    story.append(Paragraph(
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='{badge_color}'><b>{badge_icon} {type_label}</b></font> | {', '.join(meta_parts)}",
+                        meta_style
+                    ))
                 
                 citations = article.get('cited_by_count', 0)
                 citations_per_year = article.get('citations_per_year', 0)
@@ -1926,7 +2037,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 doi_url = article.get('doi_url', '')
                 if doi_url:
                     doi_url_clean = clean_doi_url(doi_url)
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style_default))
                 
                 story.append(Spacer(1, 0.15*cm))
                 
@@ -2054,11 +2165,56 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         fontName=russian_font_name
     )
     
-    meta_style = ParagraphStyle(
-        'MetaStyle',
+    # Base meta style (green - default for articles)
+    meta_style_default = ParagraphStyle(
+        'MetaDefault',
         parent=styles['Normal'],
         fontSize=8,
-        textColor=colors.HexColor('#7F8C8D'),
+        textColor=colors.HexColor('#27ae60'),
+        spaceAfter=2,
+        leftIndent=0,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for preprints (purple)
+    meta_style_preprint = ParagraphStyle(
+        'MetaPreprint',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#9b59b6'),
+        spaceAfter=2,
+        leftIndent=0,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for books/chapters (orange)
+    meta_style_book = ParagraphStyle(
+        'MetaBook',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#e67e22'),
+        spaceAfter=2,
+        leftIndent=0,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for conference proceedings (blue)
+    meta_style_conference = ParagraphStyle(
+        'MetaConference',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#2980b9'),
+        spaceAfter=2,
+        leftIndent=0,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for other types (gray)
+    meta_style_other = ParagraphStyle(
+        'MetaOther',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#7f8c8d'),
         spaceAfter=2,
         leftIndent=0,
         fontName=russian_font_name
@@ -2225,12 +2381,12 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         # Single output of affiliations with proper separator
         affs = clean_text(article.get('affiliations_str', ''))
         if affs and affs != 'No affiliations specified':
-            story.append(Paragraph(f"<b>Affiliations:</b> {affs}", meta_style))
+            story.append(Paragraph(f"<b>Affiliations:</b> {affs}", meta_style_default))
         
         # ADDED: Journal name
         journal_name_article = clean_text(article.get('journal_name', ''))
         if journal_name_article:
-            story.append(Paragraph(f"<b>Journal:</b> {journal_name_article}", meta_style))
+            story.append(Paragraph(f"<b>Journal:</b> {journal_name_article}", meta_style_default))
         
         year = article.get('publication_year', '')
         volume = article.get('volume', '')
@@ -2248,7 +2404,26 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
             meta_parts.append(f"pp. {pages}")
         
         if meta_parts:
-            story.append(Paragraph(f"{', '.join(meta_parts)}", meta_style))
+            # Get publication type for styling
+            badge_color, badge_icon, type_label = get_publication_badge(article)
+            
+            # Choose appropriate style based on type
+            if type_label == 'Preprint':
+                meta_style = meta_style_preprint
+            elif type_label == 'Book/Chapter':
+                meta_style = meta_style_book
+            elif type_label == 'Conference':
+                meta_style = meta_style_conference
+            elif type_label == 'Article':
+                meta_style = meta_style_default
+            else:
+                meta_style = meta_style_other
+            
+            # Display type badge with meta information
+            story.append(Paragraph(
+                f"<font color='{badge_color}'><b>{badge_icon} {type_label}</b></font> | {', '.join(meta_parts)}",
+                meta_style
+            ))
         
         citations = article.get('cited_by_count', 0)
         citations_per_year = article.get('citations_per_year', 0)
@@ -2261,7 +2436,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         doi_url = article.get('doi_url', '')
         if doi_url:
             doi_url_clean = clean_doi_url(doi_url)
-            story.append(Paragraph(f"<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style))
+            story.append(Paragraph(f"<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style_default))
         
         story.append(Spacer(1, 0.15*cm))
         
@@ -2408,11 +2583,56 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
         fontName=russian_font_name
     )
     
-    meta_style = ParagraphStyle(
-        'MetaStyle',
+    # Base meta style (green - default for articles)
+    meta_style_default = ParagraphStyle(
+        'MetaDefault',
         parent=styles['Normal'],
         fontSize=8,
-        textColor=colors.HexColor('#7F8C8D'),
+        textColor=colors.HexColor('#27ae60'),
+        spaceAfter=2,
+        leftIndent=40,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for preprints (purple)
+    meta_style_preprint = ParagraphStyle(
+        'MetaPreprint',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#9b59b6'),
+        spaceAfter=2,
+        leftIndent=40,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for books/chapters (orange)
+    meta_style_book = ParagraphStyle(
+        'MetaBook',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#e67e22'),
+        spaceAfter=2,
+        leftIndent=40,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for conference proceedings (blue)
+    meta_style_conference = ParagraphStyle(
+        'MetaConference',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#2980b9'),
+        spaceAfter=2,
+        leftIndent=40,
+        fontName=russian_font_name
+    )
+    
+    # Meta style for other types (gray)
+    meta_style_other = ParagraphStyle(
+        'MetaOther',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#7f8c8d'),
         spaceAfter=2,
         leftIndent=40,
         fontName=russian_font_name
@@ -2606,12 +2826,12 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 # Single output of affiliations with proper separator
                 affs = clean_text(article.get('affiliations_str', ''))
                 if affs and affs != 'No affiliations specified':
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style_default))
                 
                 # ADDED: Journal name
                 journal_name_article = clean_text(article.get('journal_name', ''))
                 if journal_name_article:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Journal:</b> {journal_name_article}", meta_style))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Journal:</b> {journal_name_article}", meta_style_default))
                 
                 year = article.get('publication_year', '')
                 volume = article.get('volume', '')
@@ -2629,7 +2849,26 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                     meta_parts.append(f"pp. {pages}")
                 
                 if meta_parts:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{', '.join(meta_parts)}", meta_style))
+                    # Get publication type for styling
+                    badge_color, badge_icon, type_label = get_publication_badge(article)
+                    
+                    # Choose appropriate style based on type
+                    if type_label == 'Preprint':
+                        meta_style = meta_style_preprint
+                    elif type_label == 'Book/Chapter':
+                        meta_style = meta_style_book
+                    elif type_label == 'Conference':
+                        meta_style = meta_style_conference
+                    elif type_label == 'Article':
+                        meta_style = meta_style_default
+                    else:
+                        meta_style = meta_style_other
+                    
+                    # Display type badge with meta information
+                    story.append(Paragraph(
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='{badge_color}'><b>{badge_icon} {type_label}</b></font> | {', '.join(meta_parts)}",
+                        meta_style
+                    ))
                 
                 citations = article.get('cited_by_count', 0)
                 citations_per_year = article.get('citations_per_year', 0)
@@ -2642,7 +2881,7 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 doi_url = article.get('doi_url', '')
                 if doi_url:
                     doi_url_clean = clean_doi_url(doi_url)
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style_default))
                 
                 story.append(Spacer(1, 0.15*cm))
                 
@@ -2927,14 +3166,28 @@ def step_topic_selection():
             if st.button(f"Select", key=f"select_{idx}", 
                         use_container_width=True,
                         type="primary" if is_selected else "secondary"):
-                st.session_state.selected_topic = topic
-                
+                # Clear all dependent data when topic changes
+                topic_id = None
                 for work in st.session_state.works_data:
                     if work.get('primary_topic') == topic:
                         topic_id = work.get('topic_id')
                         if topic_id:
-                            st.session_state.selected_topic_id = topic_id
                             break
+                
+                # Store new selection
+                st.session_state.selected_topic = topic
+                if topic_id:
+                    st.session_state.selected_topic_id = topic_id
+                
+                # Clear all cached data that depends on topic/year
+                keys_to_clear = [
+                    'selected_years', 'all_works', 'enriched_count', 
+                    'pdf_cache', 'all_reports_generated', 'filtered_articles',
+                    'search_query', 'search_results_count', 'years_input'
+                ]
+                for key in keys_to_clear:
+                    if key in st.session_state:
+                        del st.session_state[key]
                 
                 st.rerun()
     
@@ -3025,28 +3278,7 @@ def step_year_selection():
             """, unsafe_allow_html=True)
     
     st.markdown("---")
-    col_reset1, col_reset2, col_reset3 = st.columns([1, 2, 1])
-    with col_reset2:
-        if st.button("🔄 Reset Cached Data (Clear Old Results)", use_container_width=True, type="secondary"):
-            # Очищаем все кэшированные данные
-            if 'all_works' in st.session_state:
-                del st.session_state.all_works
-            if 'enriched_count' in st.session_state:
-                del st.session_state.enriched_count
-            if 'pdf_cache' in st.session_state:
-                del st.session_state.pdf_cache
-            if 'all_reports_generated' in st.session_state:
-                del st.session_state.all_reports_generated
-            if 'filtered_articles' in st.session_state:
-                del st.session_state.filtered_articles
-            if 'search_query' in st.session_state:
-                del st.session_state.search_query
-            if 'search_results_count' in st.session_state:
-                del st.session_state.search_results_count
-            st.success("✅ Cache cleared! You can now select new years.")
-            st.rerun()
     
-    st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("📊 Generate Reports", type="primary", use_container_width=True):
@@ -3059,22 +3291,16 @@ def step_year_selection():
                 st.error("❌ Invalid year format. Please check your input.")
                 return
             
-            # Очищаем кэшированные данные при изменении года
+            # Clear cached data if years have changed
             if 'selected_years' in st.session_state and st.session_state.selected_years != years:
-                if 'all_works' in st.session_state:
-                    del st.session_state.all_works
-                if 'enriched_count' in st.session_state:
-                    del st.session_state.enriched_count
-                if 'pdf_cache' in st.session_state:
-                    del st.session_state.pdf_cache
-                if 'all_reports_generated' in st.session_state:
-                    del st.session_state.all_reports_generated
-                if 'filtered_articles' in st.session_state:
-                    del st.session_state.filtered_articles
-                if 'search_query' in st.session_state:
-                    del st.session_state.search_query
-                if 'search_results_count' in st.session_state:
-                    del st.session_state.search_results_count
+                keys_to_clear = [
+                    'all_works', 'enriched_count', 'pdf_cache', 
+                    'all_reports_generated', 'filtered_articles',
+                    'search_query', 'search_results_count'
+                ]
+                for key in keys_to_clear:
+                    if key in st.session_state:
+                        del st.session_state[key]
             
             st.session_state.selected_years = years
             st.session_state.years_input = years_input
@@ -3140,6 +3366,9 @@ def step_results():
     else:
         current_articles = enriched_works
     
+    # Create unique filter ID for caching
+    filter_hash = hashlib.md5(str(sorted([a.get('doi', '') for a in current_articles])).encode()).hexdigest()[:16]
+    
     # Statistics
     total_articles = len(current_articles)
     total_citations = sum(w.get('cited_by_count', 0) for w in current_articles)
@@ -3161,7 +3390,7 @@ def step_results():
     with col_sort2:
         sort_citations = st.radio(
             "Citations Report sorting:",
-            options=["Citations per Year", "Total Citations"],
+            options=["Citations per Year", "Total Citations", "Publication Date (Newest First)"],
             index=0,
             key="sort_citations"
         )
@@ -3174,10 +3403,14 @@ def step_results():
             key="sort_country"
         )
     
-    # Generate groupings with caching
+    # Generate groupings with caching using unique keys
     with st.spinner("Generating report groupings..."):
-        publisher_hierarchy = cached_group_articles_by_publisher_journal(tuple(current_articles))
-        country_hierarchy = cached_group_articles_by_country_affiliation(tuple(current_articles))
+        # Create unique cache keys based on all parameters
+        articles_tuple = tuple(current_articles)
+        
+        # For publisher hierarchy, include sort option in cache key via function parameters
+        publisher_hierarchy = cached_group_articles_by_publisher_journal(articles_tuple)
+        country_hierarchy = cached_group_articles_by_country_affiliation(articles_tuple)
         
         # Apply sorting based on user selection
         if sort_publisher == "By Article Count":
@@ -3186,9 +3419,12 @@ def step_results():
         if sort_country == "By Article Count":
             country_hierarchy = sort_hierarchy_by_article_count(country_hierarchy)
         
+        # For citations, include sort_by parameter
         citations_sorted = cached_sort_articles_by_citations(
-            tuple(current_articles), 
-            'total_citations' if sort_citations == "Total Citations" else 'citations_per_year'
+            articles_tuple, 
+            'total_citations' if sort_citations == "Total Citations" 
+            else 'publication_date' if sort_citations == "Publication Date (Newest First)"
+            else 'citations_per_year'
         )
     
     col1, col2, col3, col4 = st.columns(4)
@@ -3245,9 +3481,10 @@ def step_results():
     if 'all_reports_generated' not in st.session_state:
         st.session_state.all_reports_generated = False
     
-    cache_key_publisher = f"publisher_{journal_abbr}_{'_'.join(map(str, years))}_{sort_publisher}"
-    cache_key_citations = f"citations_{journal_abbr}_{'_'.join(map(str, years))}_{sort_citations}"
-    cache_key_country = f"country_{journal_abbr}_{'_'.join(map(str, years))}_{sort_country}"
+    # Create unique cache keys incorporating all parameters including filter
+    cache_key_publisher = f"publisher_{filter_hash}_{'_'.join(map(str, years))}_{sort_publisher}"
+    cache_key_citations = f"citations_{filter_hash}_{'_'.join(map(str, years))}_{sort_citations}"
+    cache_key_country = f"country_{filter_hash}_{'_'.join(map(str, years))}_{sort_country}"
     
     # Advanced Search button
     col_adv1, col_adv2, col_adv3 = st.columns([1, 2, 1])
