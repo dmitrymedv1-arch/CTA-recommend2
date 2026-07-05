@@ -1096,7 +1096,7 @@ def get_publication_type_info(work: dict) -> Tuple[str, str, str]:
     primary_location = work.get('primary_location', {})
     source = primary_location.get('source', {}) if primary_location else {}
     source_type = source.get('type', '').lower() if source else ''
-    raw_type = primary_location.get('raw_type', '').lower() if primary_location and isinstance(primary_location, dict) else ''
+    raw_type = primary_location.get('raw_type', '').lower() if primary_location and isinstance(primary_location, dict) and primary_location.get('raw_type') else ''
     
     # Check for preprint / repository
     if pub_type == 'preprint' or source_type == 'repository' or 'preprint' in pub_type:
