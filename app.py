@@ -1087,37 +1087,37 @@ def get_oa_status(work: dict) -> str:
             return 'Open Access'
     return 'Closed Access'
 
-def get_publication_badge(work: dict) -> Tuple[str, str, str]:
+def get_publication_type_info(work: dict) -> Tuple[str, str, str]:
     """
-    Determine publication type badge color, icon, and label.
-    Returns: (color_hex, icon, label)
+    Determine publication type, color, and icon for styling.
+    Returns: (type_label, color_hex, icon_emoji)
     """
     pub_type = work.get('type', '').lower()
-    
-    # Get source type from primary location
     primary_location = work.get('primary_location', {})
-    source = primary_location.get('source', {})
+    source = primary_location.get('source', {}) if primary_location else {}
     source_type = source.get('type', '').lower() if source else ''
     raw_type = primary_location.get('raw_type', '').lower() if primary_location else ''
     
-    # Check for preprint/repository
-    if pub_type == 'preprint' or source_type == 'repository' or 'preprint' in raw_type:
-        return '#9b59b6', '📋', 'Preprint'
+    # Check for preprint / repository
+    if pub_type == 'preprint' or source_type == 'repository' or 'preprint' in pub_type:
+        return ('Preprint', '#9b59b6', '📋')
     
-    # Check for book/chapter
-    if pub_type in ['book-chapter', 'book', 'edited-book'] or source_type == 'book series':
-        return '#e67e22', '📚', 'Book/Chapter'
+    # Check for book / book chapter
+    if pub_type in ['book-chapter', 'book', 'edited-book'] or source_type == 'book series' or 'book' in pub_type:
+        return ('Book/Chapter', '#e67e22', '📚')
     
     # Check for conference proceedings
-    if pub_type == 'proceedings-article' or 'proceedings' in pub_type or 'conference' in raw_type:
-        return '#2980b9', '🎤', 'Conference'
+    if pub_type == 'proceedings-article' or 'proceedings' in pub_type or 'proceedings' in raw_type:
+        return ('Conference', '#2980b9', '🎤')
     
-    # Check for journal article (default)
-    if pub_type == 'journal-article' or source_type == 'journal' or not pub_type:
-        return '#27ae60', '📄', 'Article'
+    # Check for journal article
+    if pub_type == 'journal-article' or source_type == 'journal':
+        return ('Article', '#27ae60', '📄')
     
-    # Other/unknown
-    return '#7f8c8d', '📎', pub_type.capitalize() if pub_type else 'Other'
+    # Default
+    if pub_type:
+        return (pub_type.capitalize(), '#7f8c8d', '📎')
+    return ('Other', '#95a5a6', '📎')
 
 def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     """
@@ -1197,20 +1197,18 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     # OA status
     oa_status = get_oa_status(work)
     
-    # Get publication type and source type
-    pub_type = work.get('type', '')
-    source_type = ''
-    if primary_location:
-        source = primary_location.get('source', {})
-        if source:
-            source_type = source.get('type', '')
+    # Publication date
+    publication_date = work.get('publication_date', '')
+    
+    # Get publication type info
+    type_label, type_color, type_icon = get_publication_type_info(work)
     
     enriched = {
         'doi': doi_clean,
         'doi_url': f"https://doi.org/{doi_clean}" if doi_clean else '',
         'title': work.get('title', 'No title'),
         'publication_year': publication_year,
-        'publication_date': work.get('publication_date', ''),
+        'publication_date': publication_date,
         'cited_by_count': citations_total,
         'citations_per_year': round(citations_per_year, 1),
         'referenced_works_count': referenced_works,
@@ -1227,8 +1225,10 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         'primary_topic': topic_name,
         'topic_id': topic_id,
         'oa_status': oa_status,
-        'type': pub_type,
-        'source_type': source_type,
+        'type': work.get('type', ''),
+        'type_label': type_label,
+        'type_color': type_color,
+        'type_icon': type_icon,
         'country': extract_country_from_work(work)
     }
     
@@ -1239,20 +1239,20 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
 # ============================================================================
 
 @st.cache_data(ttl=3600)
-def cached_group_articles_by_publisher_journal(articles_tuple: tuple) -> Dict[str, Dict[str, List[dict]]]:
+def cached_group_articles_by_publisher_journal(articles_tuple: tuple, sort_option: str = 'alphabetical') -> Dict[str, Dict[str, List[dict]]]:
     """
-    Cached version of group_articles_by_publisher_journal.
+    Cached version of group_articles_by_publisher_journal with sort option.
     """
     articles = list(articles_tuple)
-    return group_articles_by_publisher_journal(articles)
+    return group_articles_by_publisher_journal(articles, sort_option)
 
 @st.cache_data(ttl=3600)
-def cached_group_articles_by_country_affiliation(articles_tuple: tuple) -> Dict[str, Dict[str, List[dict]]]:
+def cached_group_articles_by_country_affiliation(articles_tuple: tuple, sort_option: str = 'alphabetical') -> Dict[str, Dict[str, List[dict]]]:
     """
-    Cached version of group_articles_by_country_affiliation.
+    Cached version of group_articles_by_country_affiliation with sort option.
     """
     articles = list(articles_tuple)
-    return group_articles_by_country_affiliation(articles)
+    return group_articles_by_country_affiliation(articles, sort_option)
 
 @st.cache_data(ttl=3600)
 def cached_sort_articles_by_citations(articles_tuple: tuple, sort_by: str = 'citations_per_year') -> List[dict]:
@@ -1262,10 +1262,10 @@ def cached_sort_articles_by_citations(articles_tuple: tuple, sort_by: str = 'cit
     articles = list(articles_tuple)
     return sort_articles_by_citations(articles, sort_by)
 
-def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[str, List[dict]]]:
+def group_articles_by_publisher_journal(articles: List[dict], sort_option: str = 'alphabetical') -> Dict[str, Dict[str, List[dict]]]:
     """
     Group articles by Publisher -> Journal.
-    Sorted alphabetically.
+    Sorted according to sort_option: 'alphabetical' or 'by_count'.
     """
     hierarchy = defaultdict(lambda: defaultdict(list))
     
@@ -1286,10 +1286,33 @@ def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[
             journal = 'Unknown Journal'
         hierarchy[publisher][journal].append(article)
     
+    # Sort top-level publishers
+    if sort_option == 'by_count':
+        publisher_items = []
+        for publisher in hierarchy.keys():
+            if publisher is not None:
+                total_count = sum(len(articles) for articles in hierarchy[publisher].values())
+                publisher_items.append((publisher, total_count))
+        publisher_items.sort(key=lambda x: x[1], reverse=True)
+        sorted_publishers = [item[0] for item in publisher_items]
+    else:  # alphabetical
+        sorted_publishers = sorted([p for p in hierarchy.keys() if p is not None])
+    
     sorted_hierarchy = {}
-    for publisher in sorted([p for p in hierarchy.keys() if p is not None]):
+    for publisher in sorted_publishers:
+        # Sort journals within each publisher
+        if sort_option == 'by_count':
+            journal_items = []
+            for journal in hierarchy[publisher].keys():
+                if journal is not None:
+                    journal_items.append((journal, len(hierarchy[publisher][journal])))
+            journal_items.sort(key=lambda x: x[1], reverse=True)
+            sorted_journals = [item[0] for item in journal_items]
+        else:  # alphabetical
+            sorted_journals = sorted([j for j in hierarchy[publisher].keys() if j is not None])
+        
         sorted_hierarchy[publisher] = {}
-        for journal in sorted([j for j in hierarchy[publisher].keys() if j is not None]):
+        for journal in sorted_journals:
             sorted_articles = sorted(
                 hierarchy[publisher][journal],
                 key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
@@ -1299,11 +1322,11 @@ def group_articles_by_publisher_journal(articles: List[dict]) -> Dict[str, Dict[
     
     return sorted_hierarchy
 
-def group_articles_by_country_affiliation(articles: List[dict]) -> Dict[str, Dict[str, List[dict]]]:
+def group_articles_by_country_affiliation(articles: List[dict], sort_option: str = 'alphabetical') -> Dict[str, Dict[str, List[dict]]]:
     """
     Group articles by Country -> Affiliation.
     An article can appear under multiple countries if it has authors from different countries.
-    Sorted alphabetically.
+    Sorted according to sort_option: 'alphabetical' or 'by_count'.
     """
     hierarchy = defaultdict(lambda: defaultdict(list))
     
@@ -1322,10 +1345,33 @@ def group_articles_by_country_affiliation(articles: List[dict]) -> Dict[str, Dic
         for aff in affiliations:
             hierarchy[country][aff].append(article)
     
+    # Sort top-level countries
+    if sort_option == 'by_count':
+        country_items = []
+        for country in hierarchy.keys():
+            if country is not None:
+                total_count = sum(len(articles) for articles in hierarchy[country].values())
+                country_items.append((country, total_count))
+        country_items.sort(key=lambda x: x[1], reverse=True)
+        sorted_countries = [item[0] for item in country_items]
+    else:  # alphabetical
+        sorted_countries = sorted([c for c in hierarchy.keys() if c is not None])
+    
     sorted_hierarchy = {}
-    for country in sorted([c for c in hierarchy.keys() if c is not None]):
+    for country in sorted_countries:
+        # Sort affiliations within each country
+        if sort_option == 'by_count':
+            affiliation_items = []
+            for affiliation in hierarchy[country].keys():
+                if affiliation is not None:
+                    affiliation_items.append((affiliation, len(hierarchy[country][affiliation])))
+            affiliation_items.sort(key=lambda x: x[1], reverse=True)
+            sorted_affiliations = [item[0] for item in affiliation_items]
+        else:  # alphabetical
+            sorted_affiliations = sorted([a for a in hierarchy[country].keys() if a is not None])
+        
         sorted_hierarchy[country] = {}
-        for affiliation in sorted([a for a in hierarchy[country].keys() if a is not None]):
+        for affiliation in sorted_affiliations:
             sorted_articles = sorted(
                 hierarchy[country][affiliation],
                 key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
@@ -1337,7 +1383,7 @@ def group_articles_by_country_affiliation(articles: List[dict]) -> Dict[str, Dic
 
 def sort_articles_by_citations(articles: List[dict], sort_by: str = 'citations_per_year') -> List[dict]:
     """
-    Sort all articles by citations per year or total citations or publication date (descending).
+    Sort all articles by citations per year, total citations, or publication date.
     """
     if sort_by == 'total_citations':
         return sorted(
@@ -1348,7 +1394,7 @@ def sort_articles_by_citations(articles: List[dict], sort_by: str = 'citations_p
     elif sort_by == 'publication_date':
         return sorted(
             articles,
-            key=lambda x: x.get('publication_year', 0) if x.get('publication_year') is not None else 0,
+            key=lambda x: x.get('publication_date', '0000-00-00') if x.get('publication_date') else '0000-00-00',
             reverse=True
         )
     else:  # default: citations_per_year
@@ -1660,13 +1706,47 @@ def clean_doi_url(url):
     url = url.replace('>', '&gt;')
     return url
 
+def add_logo_to_pdf(story, logo_path, max_width=150, max_height=150, add_spacer=True):
+    """
+    Add logo to PDF with preserved aspect ratio.
+    Returns True if logo was successfully added, False otherwise.
+    """
+    if not logo_path or not os.path.exists(logo_path):
+        return False
+    
+    try:
+        from PIL import Image as PILImage
+        pil_img = PILImage.open(logo_path)
+        original_width, original_height = pil_img.size
+        pil_img.close()
+        
+        # Calculate scale preserving aspect ratio
+        width_ratio = max_width / original_width
+        height_ratio = max_height / original_height
+        scale_ratio = min(width_ratio, height_ratio)
+        
+        new_width = original_width * scale_ratio
+        new_height = original_height * scale_ratio
+        
+        logo = Image(logo_path, width=new_width, height=new_height)
+        logo.hAlign = 'CENTER'
+        story.append(logo)
+        
+        if add_spacer:
+            story.append(Spacer(1, 0.5*cm))
+        return True
+    except Exception as e:
+        logger.warning(f"Could not load logo: {e}")
+        return False
+
 def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, years: List[int],
                                       hierarchy: Dict, logo_path: str = None,
-                                      report_title: str = "Report by Publisher & Journal") -> bytes:
+                                      report_title: str = "Report by Publisher & Journal",
+                                      sort_option: str = 'alphabetical') -> bytes:
     """Generate PDF report grouping articles by Publisher -> Journal."""
     russian_font_name = register_russian_font()
     
-    # Получаем информацию о фильтре из session_state
+    # Get filter info from session_state
     search_query = st.session_state.get('search_query', '')
     has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
     
@@ -1744,7 +1824,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
         fontName=russian_font_name
     )
     
-    # Base meta style (green - default for articles)
     meta_style_default = ParagraphStyle(
         'MetaDefault',
         parent=styles['Normal'],
@@ -1755,7 +1834,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
         fontName=russian_font_name
     )
     
-    # Meta style for preprints (purple)
     meta_style_preprint = ParagraphStyle(
         'MetaPreprint',
         parent=styles['Normal'],
@@ -1766,7 +1844,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
         fontName=russian_font_name
     )
     
-    # Meta style for books/chapters (orange)
     meta_style_book = ParagraphStyle(
         'MetaBook',
         parent=styles['Normal'],
@@ -1777,7 +1854,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
         fontName=russian_font_name
     )
     
-    # Meta style for conference proceedings (blue)
     meta_style_conference = ParagraphStyle(
         'MetaConference',
         parent=styles['Normal'],
@@ -1788,7 +1864,6 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
         fontName=russian_font_name
     )
     
-    # Meta style for other types (gray)
     meta_style_other = ParagraphStyle(
         'MetaOther',
         parent=styles['Normal'],
@@ -1876,25 +1951,8 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     
     story.append(Spacer(1, 2*cm))
     
-    if logo_path and os.path.exists(logo_path):
-        try:
-            from PIL import Image as PILImage
-            pil_img = PILImage.open(logo_path)
-            original_width, original_height = pil_img.size
-            pil_img.close()
-            max_width = 300
-            max_height = 250
-            width_ratio = max_width / original_width
-            height_ratio = max_height / original_height
-            scale_ratio = min(width_ratio, height_ratio)
-            new_width = original_width * scale_ratio
-            new_height = original_height * scale_ratio
-            logo = Image(logo_path, width=new_width, height=new_height)
-            logo.hAlign = 'CENTER'
-            story.append(logo)
-            story.append(Spacer(1, 1*cm))
-        except Exception as e:
-            logger.warning(f"Could not load logo: {e}")
+    # Add logo at beginning with preserved aspect ratio
+    add_logo_to_pdf(story, logo_path, max_width=200, max_height=200, add_spacer=True)
     
     story.append(Paragraph("Analytical Report", title_style))
     story.append(Paragraph(f"«{clean_text(journal_name)}»", subtitle_style))
@@ -1904,18 +1962,21 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     story.append(Paragraph(f"Publication period: {years_str}", subtitle_style))
     story.append(Spacer(1, 1.5*cm))
     
-    # Формируем intro_text с учетом фильтра
+    # Format intro text with filter info
     if search_query and has_filter:
         intro_text = f"""
         This report contains {total_articles} articles from «{clean_text(journal_name)}»,
         grouped by Publisher and Journal.
         
         <b>Applied filter:</b> «{clean_text(search_query)}»
+        <b>Sorting:</b> {sort_option.replace('_', ' ').title()}
         """
     else:
         intro_text = f"""
         This report contains {total_articles} articles from «{clean_text(journal_name)}»,
         grouped by Publisher and Journal.
+        
+        <b>Sorting:</b> {sort_option.replace('_', ' ').title()}
         """
     
     story.append(Paragraph(intro_text, intro_style))
@@ -1925,7 +1986,8 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
         ["Metric", "Value"],
         ["Total Articles", str(total_articles)],
         ["Publishers", str(total_publishers)],
-        ["Report Type", report_title]
+        ["Report Type", report_title],
+        ["Sorting", sort_option.replace('_', ' ').title()]
     ]
     
     stats_table = Table(stats_data, colWidths=[doc.width/2.5, doc.width/3])
@@ -1945,7 +2007,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     
     story.append(Paragraph("Table of Contents", title_style))
     story.append(Spacer(1, 0.5*cm))
-        
+    
     for publisher, journals in hierarchy.items():
         publisher_articles = sum(len(articles) for articles in journals.values())
         anchor_id = f"publisher_{hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]}"
@@ -1989,7 +2051,35 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 if affs and affs != 'No affiliations specified':
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style_default))
                 
+                # Publication type badge
+                type_label = article.get('type_label', 'Other')
+                type_icon = article.get('type_icon', '📎')
+                type_color = article.get('type_color', '#7f8c8d')
+                
+                # Select appropriate style based on type
+                if type_label == 'Preprint':
+                    meta_style = meta_style_preprint
+                elif type_label == 'Book/Chapter':
+                    meta_style = meta_style_book
+                elif type_label == 'Conference':
+                    meta_style = meta_style_conference
+                elif type_label == 'Article':
+                    meta_style = meta_style_default
+                else:
+                    meta_style = meta_style_other
+                
+                story.append(Paragraph(
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='{type_color}'><b>{type_icon} {type_label}</b></font>",
+                    meta_style
+                ))
+                
+                # Journal name
+                journal_name_article = clean_text(article.get('journal_name', ''))
+                if journal_name_article:
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Journal:</b> {journal_name_article}", meta_style_default))
+                
                 year = article.get('publication_year', '')
+                pub_date = article.get('publication_date', '')
                 volume = article.get('volume', '')
                 issue = article.get('issue', '')
                 pages = article.get('pages', '')
@@ -1997,6 +2087,8 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                 meta_parts = []
                 if year:
                     meta_parts.append(str(year))
+                if pub_date and pub_date != '0000-00-00':
+                    meta_parts.append(f"({pub_date})")
                 if volume:
                     meta_parts.append(f"Vol. {volume}")
                 if issue:
@@ -2005,26 +2097,7 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                     meta_parts.append(f"pp. {pages}")
                 
                 if meta_parts:
-                    # Get publication type for styling
-                    badge_color, badge_icon, type_label = get_publication_badge(article)
-                    
-                    # Choose appropriate style based on type
-                    if type_label == 'Preprint':
-                        meta_style = meta_style_preprint
-                    elif type_label == 'Book/Chapter':
-                        meta_style = meta_style_book
-                    elif type_label == 'Conference':
-                        meta_style = meta_style_conference
-                    elif type_label == 'Article':
-                        meta_style = meta_style_default
-                    else:
-                        meta_style = meta_style_other
-                    
-                    # Display type badge with meta information
-                    story.append(Paragraph(
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='{badge_color}'><b>{badge_icon} {type_label}</b></font> | {', '.join(meta_parts)}",
-                        meta_style
-                    ))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{', '.join(meta_parts)}", meta_style_default))
                 
                 citations = article.get('cited_by_count', 0)
                 citations_per_year = article.get('citations_per_year', 0)
@@ -2064,6 +2137,9 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
     story.append(Paragraph(conclusion_text, conclusion_style))
     story.append(Spacer(1, 1*cm))
     
+    # Add logo at end with preserved aspect ratio (smaller)
+    add_logo_to_pdf(story, logo_path, max_width=120, max_height=120, add_spacer=True)
+    
     story.append(Paragraph(f"© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d')}", footer_style))
     story.append(Paragraph("Report generated using CTA Article Recommender Pro*2", footer_style))
     
@@ -2072,11 +2148,12 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
 
 def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[int],
                               articles: List[dict], logo_path: str = None,
-                              report_title: str = "Report by Citations per Year") -> bytes:
+                              report_title: str = "Report by Citations per Year",
+                              sort_option: str = 'citations_per_year') -> bytes:
     """Generate PDF report with articles sorted by citations per year."""
     russian_font_name = register_russian_font()
     
-    # Получаем информацию о фильтре из session_state
+    # Get filter info from session_state
     search_query = st.session_state.get('search_query', '')
     has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
     
@@ -2133,7 +2210,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         fontName=russian_font_name
     )
     
-    # Base meta style (green - default for articles)
     meta_style_default = ParagraphStyle(
         'MetaDefault',
         parent=styles['Normal'],
@@ -2144,7 +2220,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         fontName=russian_font_name
     )
     
-    # Meta style for preprints (purple)
     meta_style_preprint = ParagraphStyle(
         'MetaPreprint',
         parent=styles['Normal'],
@@ -2155,7 +2230,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         fontName=russian_font_name
     )
     
-    # Meta style for books/chapters (orange)
     meta_style_book = ParagraphStyle(
         'MetaBook',
         parent=styles['Normal'],
@@ -2166,7 +2240,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         fontName=russian_font_name
     )
     
-    # Meta style for conference proceedings (blue)
     meta_style_conference = ParagraphStyle(
         'MetaConference',
         parent=styles['Normal'],
@@ -2177,7 +2250,6 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         fontName=russian_font_name
     )
     
-    # Meta style for other types (gray)
     meta_style_other = ParagraphStyle(
         'MetaOther',
         parent=styles['Normal'],
@@ -2243,25 +2315,8 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     story.append(Spacer(1, 2*cm))
     
-    if logo_path and os.path.exists(logo_path):
-        try:
-            from PIL import Image as PILImage
-            pil_img = PILImage.open(logo_path)
-            original_width, original_height = pil_img.size
-            pil_img.close()
-            max_width = 150
-            max_height = 125
-            width_ratio = max_width / original_width
-            height_ratio = max_height / original_height
-            scale_ratio = min(width_ratio, height_ratio)
-            new_width = original_width * scale_ratio
-            new_height = original_height * scale_ratio
-            logo = Image(logo_path, width=new_width, height=new_height)
-            logo.hAlign = 'CENTER'
-            story.append(logo)
-            story.append(Spacer(1, 1*cm))
-        except Exception as e:
-            logger.warning(f"Could not load logo: {e}")
+    # Add logo at beginning with preserved aspect ratio
+    add_logo_to_pdf(story, logo_path, max_width=200, max_height=200, add_spacer=True)
     
     story.append(Paragraph("Analytical Report", title_style))
     story.append(Paragraph(f"«{clean_text(journal_name)}»", subtitle_style))
@@ -2273,11 +2328,15 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     avg_citations = sum(a.get('citations_per_year', 0) for a in articles) / total_articles if total_articles > 0 else 0
     
-    # Формируем intro_text с учетом фильтра
+    # Format intro text with filter info
+    sort_display = sort_option.replace('_', ' ').title()
+    if sort_option == 'publication_date':
+        sort_display = 'Publication Date (Newest First)'
+    
     if search_query and has_filter:
         intro_text = f"""
         This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-        sorted by citations per year (descending).
+        sorted by {sort_display}.
         
         Average citations per year: {avg_citations:.1f}
         
@@ -2286,7 +2345,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     else:
         intro_text = f"""
         This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-        sorted by citations per year (descending).
+        sorted by {sort_display}.
         
         Average citations per year: {avg_citations:.1f}
         """
@@ -2298,7 +2357,8 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         ["Metric", "Value"],
         ["Total Articles", str(total_articles)],
         ["Avg Citations/Year", f"{avg_citations:.1f}"],
-        ["Report Type", report_title]
+        ["Report Type", report_title],
+        ["Sorting", sort_display]
     ]
     
     stats_table = Table(stats_data, colWidths=[doc.width/2.5, doc.width/3])
@@ -2321,9 +2381,18 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     for idx, article in enumerate(articles[:20], 1):
         title = clean_text(article.get('title', 'No title')[:60])
-        citations = article.get('citations_per_year', 0)
+        if sort_option == 'citations_per_year':
+            citations = article.get('citations_per_year', 0)
+            display_text = f"{idx}. {title}... — {citations:.1f} citations/year"
+        elif sort_option == 'total_citations':
+            citations = article.get('cited_by_count', 0)
+            display_text = f"{idx}. {title}... — {citations} total citations"
+        else:  # publication_date
+            pub_date = article.get('publication_date', '')
+            display_text = f"{idx}. {title}... — {pub_date}"
+        
         anchor_id = f"article_{hashlib.md5(str(idx).encode('utf-8')).hexdigest()[:8]}"
-        story.append(Paragraph(f'<a href="#{anchor_id}">{idx}. {title}...</a> — {citations:.1f} citations/year', 
+        story.append(Paragraph(f'<a href="#{anchor_id}">{display_text}</a>', 
                               ParagraphStyle('TOCArticleStyle', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#2C3E50'), spaceAfter=3, fontName=russian_font_name)))
     
     if len(articles) > 20:
@@ -2332,7 +2401,8 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     story.append(PageBreak())
     
-    story.append(Paragraph("Articles by Citations per Year", title_style))
+    sort_display_title = sort_display
+    story.append(Paragraph(f"Articles by {sort_display_title}", title_style))
     story.append(Spacer(1, 0.5*cm))
     
     for idx, article in enumerate(articles, 1):
@@ -2351,12 +2421,35 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         if affs and affs != 'No affiliations specified':
             story.append(Paragraph(f"<b>Affiliations:</b> {affs}", meta_style_default))
         
-        # ADDED: Journal name
+        # Publication type badge
+        type_label = article.get('type_label', 'Other')
+        type_icon = article.get('type_icon', '📎')
+        type_color = article.get('type_color', '#7f8c8d')
+        
+        # Select appropriate style based on type
+        if type_label == 'Preprint':
+            meta_style = meta_style_preprint
+        elif type_label == 'Book/Chapter':
+            meta_style = meta_style_book
+        elif type_label == 'Conference':
+            meta_style = meta_style_conference
+        elif type_label == 'Article':
+            meta_style = meta_style_default
+        else:
+            meta_style = meta_style_other
+        
+        story.append(Paragraph(
+            f"<font color='{type_color}'><b>{type_icon} {type_label}</b></font>",
+            meta_style
+        ))
+        
+        # Journal name
         journal_name_article = clean_text(article.get('journal_name', ''))
         if journal_name_article:
             story.append(Paragraph(f"<b>Journal:</b> {journal_name_article}", meta_style_default))
         
         year = article.get('publication_year', '')
+        pub_date = article.get('publication_date', '')
         volume = article.get('volume', '')
         issue = article.get('issue', '')
         pages = article.get('pages', '')
@@ -2364,6 +2457,8 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         meta_parts = []
         if year:
             meta_parts.append(str(year))
+        if pub_date and pub_date != '0000-00-00':
+            meta_parts.append(f"({pub_date})")
         if volume:
             meta_parts.append(f"Vol. {volume}")
         if issue:
@@ -2372,26 +2467,7 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
             meta_parts.append(f"pp. {pages}")
         
         if meta_parts:
-            # Get publication type for styling
-            badge_color, badge_icon, type_label = get_publication_badge(article)
-            
-            # Choose appropriate style based on type
-            if type_label == 'Preprint':
-                meta_style = meta_style_preprint
-            elif type_label == 'Book/Chapter':
-                meta_style = meta_style_book
-            elif type_label == 'Conference':
-                meta_style = meta_style_conference
-            elif type_label == 'Article':
-                meta_style = meta_style_default
-            else:
-                meta_style = meta_style_other
-            
-            # Display type badge with meta information
-            story.append(Paragraph(
-                f"<font color='{badge_color}'><b>{badge_icon} {type_label}</b></font> | {', '.join(meta_parts)}",
-                meta_style
-            ))
+            story.append(Paragraph(f"{', '.join(meta_parts)}", meta_style_default))
         
         citations = article.get('cited_by_count', 0)
         citations_per_year = article.get('citations_per_year', 0)
@@ -2420,14 +2496,17 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     
     conclusion_text = f"""
     This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-    sorted by citations per year in descending order.
+    sorted by {sort_display} in descending order.
     
-    The articles with the highest citations per year are listed first,
+    The articles with the highest {sort_display.lower()} are listed first,
     representing the most impactful recent publications.
     """
     
     story.append(Paragraph(conclusion_text, conclusion_style))
     story.append(Spacer(1, 1*cm))
+    
+    # Add logo at end with preserved aspect ratio (smaller)
+    add_logo_to_pdf(story, logo_path, max_width=120, max_height=120, add_spacer=True)
     
     story.append(Paragraph(f"© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d')}", footer_style))
     story.append(Paragraph("Report generated using CTA Article Recommender Pro*2", footer_style))
@@ -2437,11 +2516,12 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
 
 def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, years: List[int],
                                        hierarchy: Dict, logo_path: str = None,
-                                       report_title: str = "Report by Country & Affiliation") -> bytes:
+                                       report_title: str = "Report by Country & Affiliation",
+                                       sort_option: str = 'alphabetical') -> bytes:
     """Generate PDF report grouping articles by Country -> Affiliation."""
     russian_font_name = register_russian_font()
     
-    # Получаем информацию о фильтре из session_state
+    # Get filter info from session_state
     search_query = st.session_state.get('search_query', '')
     has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
     
@@ -2519,7 +2599,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
         fontName=russian_font_name
     )
     
-    # Base meta style (green - default for articles)
     meta_style_default = ParagraphStyle(
         'MetaDefault',
         parent=styles['Normal'],
@@ -2530,7 +2609,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
         fontName=russian_font_name
     )
     
-    # Meta style for preprints (purple)
     meta_style_preprint = ParagraphStyle(
         'MetaPreprint',
         parent=styles['Normal'],
@@ -2541,7 +2619,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
         fontName=russian_font_name
     )
     
-    # Meta style for books/chapters (orange)
     meta_style_book = ParagraphStyle(
         'MetaBook',
         parent=styles['Normal'],
@@ -2552,7 +2629,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
         fontName=russian_font_name
     )
     
-    # Meta style for conference proceedings (blue)
     meta_style_conference = ParagraphStyle(
         'MetaConference',
         parent=styles['Normal'],
@@ -2563,7 +2639,6 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
         fontName=russian_font_name
     )
     
-    # Meta style for other types (gray)
     meta_style_other = ParagraphStyle(
         'MetaOther',
         parent=styles['Normal'],
@@ -2651,25 +2726,8 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     
     story.append(Spacer(1, 2*cm))
     
-    if logo_path and os.path.exists(logo_path):
-        try:
-            from PIL import Image as PILImage
-            pil_img = PILImage.open(logo_path)
-            original_width, original_height = pil_img.size
-            pil_img.close()
-            max_width = 150
-            max_height = 125
-            width_ratio = max_width / original_width
-            height_ratio = max_height / original_height
-            scale_ratio = min(width_ratio, height_ratio)
-            new_width = original_width * scale_ratio
-            new_height = original_height * scale_ratio
-            logo = Image(logo_path, width=new_width, height=new_height)
-            logo.hAlign = 'CENTER'
-            story.append(logo)
-            story.append(Spacer(1, 1*cm))
-        except Exception as e:
-            logger.warning(f"Could not load logo: {e}")
+    # Add logo at beginning with preserved aspect ratio
+    add_logo_to_pdf(story, logo_path, max_width=200, max_height=200, add_spacer=True)
     
     story.append(Paragraph("Analytical Report", title_style))
     story.append(Paragraph(f"«{clean_text(journal_name)}»", subtitle_style))
@@ -2679,18 +2737,21 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     story.append(Paragraph(f"Publication period: {years_str}", subtitle_style))
     story.append(Spacer(1, 1.5*cm))
     
-    # Формируем intro_text с учетом фильтра
+    # Format intro text with filter info
     if search_query and has_filter:
         intro_text = f"""
         This report contains {total_articles} articles from «{clean_text(journal_name)}»,
         grouped by Country and Affiliation.
         
         <b>Applied filter:</b> «{clean_text(search_query)}»
+        <b>Sorting:</b> {sort_option.replace('_', ' ').title()}
         """
     else:
         intro_text = f"""
         This report contains {total_articles} articles from «{clean_text(journal_name)}»,
         grouped by Country and Affiliation.
+        
+        <b>Sorting:</b> {sort_option.replace('_', ' ').title()}
         """
     
     story.append(Paragraph(intro_text, intro_style))
@@ -2700,7 +2761,8 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
         ["Metric", "Value"],
         ["Total Articles", str(total_articles)],
         ["Countries", str(total_countries)],
-        ["Report Type", report_title]
+        ["Report Type", report_title],
+        ["Sorting", sort_option.replace('_', ' ').title()]
     ]
     
     stats_table = Table(stats_data, colWidths=[doc.width/2.5, doc.width/3])
@@ -2764,12 +2826,35 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 if affs and affs != 'No affiliations specified':
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style_default))
                 
-                # ADDED: Journal name
+                # Publication type badge
+                type_label = article.get('type_label', 'Other')
+                type_icon = article.get('type_icon', '📎')
+                type_color = article.get('type_color', '#7f8c8d')
+                
+                # Select appropriate style based on type
+                if type_label == 'Preprint':
+                    meta_style = meta_style_preprint
+                elif type_label == 'Book/Chapter':
+                    meta_style = meta_style_book
+                elif type_label == 'Conference':
+                    meta_style = meta_style_conference
+                elif type_label == 'Article':
+                    meta_style = meta_style_default
+                else:
+                    meta_style = meta_style_other
+                
+                story.append(Paragraph(
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='{type_color}'><b>{type_icon} {type_label}</b></font>",
+                    meta_style
+                ))
+                
+                # Journal name
                 journal_name_article = clean_text(article.get('journal_name', ''))
                 if journal_name_article:
                     story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Journal:</b> {journal_name_article}", meta_style_default))
                 
                 year = article.get('publication_year', '')
+                pub_date = article.get('publication_date', '')
                 volume = article.get('volume', '')
                 issue = article.get('issue', '')
                 pages = article.get('pages', '')
@@ -2777,6 +2862,8 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                 meta_parts = []
                 if year:
                     meta_parts.append(str(year))
+                if pub_date and pub_date != '0000-00-00':
+                    meta_parts.append(f"({pub_date})")
                 if volume:
                     meta_parts.append(f"Vol. {volume}")
                 if issue:
@@ -2785,26 +2872,7 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                     meta_parts.append(f"pp. {pages}")
                 
                 if meta_parts:
-                    # Get publication type for styling
-                    badge_color, badge_icon, type_label = get_publication_badge(article)
-                    
-                    # Choose appropriate style based on type
-                    if type_label == 'Preprint':
-                        meta_style = meta_style_preprint
-                    elif type_label == 'Book/Chapter':
-                        meta_style = meta_style_book
-                    elif type_label == 'Conference':
-                        meta_style = meta_style_conference
-                    elif type_label == 'Article':
-                        meta_style = meta_style_default
-                    else:
-                        meta_style = meta_style_other
-                    
-                    # Display type badge with meta information
-                    story.append(Paragraph(
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='{badge_color}'><b>{badge_icon} {type_label}</b></font> | {', '.join(meta_parts)}",
-                        meta_style
-                    ))
+                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{', '.join(meta_parts)}", meta_style_default))
                 
                 citations = article.get('cited_by_count', 0)
                 citations_per_year = article.get('citations_per_year', 0)
@@ -2843,6 +2911,9 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
     
     story.append(Paragraph(conclusion_text, conclusion_style))
     story.append(Spacer(1, 1*cm))
+    
+    # Add logo at end with preserved aspect ratio (smaller)
+    add_logo_to_pdf(story, logo_path, max_width=120, max_height=120, add_spacer=True)
     
     story.append(Paragraph(f"© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d')}", footer_style))
     story.append(Paragraph("Report generated using CTA Article Recommender Pro*2", footer_style))
@@ -2912,6 +2983,8 @@ def step_data_input():
                         del st.session_state.all_reports_generated
                     if 'filtered_articles' in st.session_state:
                         del st.session_state.filtered_articles
+                    if 'search_query' in st.session_state:
+                        del st.session_state.search_query
                     st.rerun()
                 else:
                     st.error("❌ No valid DOI identifiers found.")
@@ -3048,6 +3121,29 @@ def step_topic_selection():
     with col_back:
         if st.button("← Back", use_container_width=True):
             st.session_state.current_step = 2
+            # Clear any existing topic selection when going back
+            if 'selected_topic' in st.session_state:
+                del st.session_state.selected_topic
+            if 'selected_topic_id' in st.session_state:
+                del st.session_state.selected_topic_id
+            if 'selected_years' in st.session_state:
+                del st.session_state.selected_years
+            if 'all_works' in st.session_state:
+                del st.session_state.all_works
+            if 'enriched_count' in st.session_state:
+                del st.session_state.enriched_count
+            if 'pdf_cache' in st.session_state:
+                del st.session_state.pdf_cache
+            if 'all_reports_generated' in st.session_state:
+                del st.session_state.all_reports_generated
+            if 'filtered_articles' in st.session_state:
+                del st.session_state.filtered_articles
+            if 'search_query' in st.session_state:
+                del st.session_state.search_query
+            if 'search_results_count' in st.session_state:
+                del st.session_state.search_results_count
+            if 'years_input' in st.session_state:
+                del st.session_state.years_input
             st.rerun()
     
     topics = st.session_state.topic_counter.most_common()
@@ -3070,32 +3166,41 @@ def step_topic_selection():
             if st.button(f"Select", key=f"select_{idx}", 
                         use_container_width=True,
                         type="primary" if is_selected else "secondary"):
-                # Clear all dependent data when topic changes
-                topic_id = None
+                # Clear previous topic data when selecting new topic
+                if 'selected_topic' in st.session_state and st.session_state.selected_topic != topic:
+                    if 'selected_topic_id' in st.session_state:
+                        del st.session_state.selected_topic_id
+                    if 'selected_years' in st.session_state:
+                        del st.session_state.selected_years
+                    if 'all_works' in st.session_state:
+                        del st.session_state.all_works
+                    if 'enriched_count' in st.session_state:
+                        del st.session_state.enriched_count
+                    if 'pdf_cache' in st.session_state:
+                        del st.session_state.pdf_cache
+                    if 'all_reports_generated' in st.session_state:
+                        del st.session_state.all_reports_generated
+                    if 'filtered_articles' in st.session_state:
+                        del st.session_state.filtered_articles
+                    if 'search_query' in st.session_state:
+                        del st.session_state.search_query
+                    if 'search_results_count' in st.session_state:
+                        del st.session_state.search_results_count
+                    if 'years_input' in st.session_state:
+                        del st.session_state.years_input
+                
+                st.session_state.selected_topic = topic
+                
                 for work in st.session_state.works_data:
                     if work.get('primary_topic') == topic:
                         topic_id = work.get('topic_id')
                         if topic_id:
+                            st.session_state.selected_topic_id = topic_id
                             break
-                
-                # Store new selection
-                st.session_state.selected_topic = topic
-                if topic_id:
-                    st.session_state.selected_topic_id = topic_id
-                
-                # Clear all cached data that depends on topic/year
-                keys_to_clear = [
-                    'selected_years', 'all_works', 'enriched_count', 
-                    'pdf_cache', 'all_reports_generated', 'filtered_articles',
-                    'search_query', 'search_results_count', 'years_input'
-                ]
-                for key in keys_to_clear:
-                    if key in st.session_state:
-                        del st.session_state[key]
                 
                 st.rerun()
     
-    if 'selected_topic' in st.session_state:
+    if 'selected_topic' in st.session_state and 'selected_topic_id' in st.session_state:
         st.markdown("---")
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -3121,6 +3226,25 @@ def step_year_selection():
     with col_back:
         if st.button("← Back", use_container_width=True):
             st.session_state.current_step = 3
+            # Keep selected topic but clear years and dependent data
+            if 'selected_years' in st.session_state:
+                del st.session_state.selected_years
+            if 'all_works' in st.session_state:
+                del st.session_state.all_works
+            if 'enriched_count' in st.session_state:
+                del st.session_state.enriched_count
+            if 'pdf_cache' in st.session_state:
+                del st.session_state.pdf_cache
+            if 'all_reports_generated' in st.session_state:
+                del st.session_state.all_reports_generated
+            if 'filtered_articles' in st.session_state:
+                del st.session_state.filtered_articles
+            if 'search_query' in st.session_state:
+                del st.session_state.search_query
+            if 'search_results_count' in st.session_state:
+                del st.session_state.search_results_count
+            if 'years_input' in st.session_state:
+                del st.session_state.years_input
             st.rerun()
     
     topic_id = st.session_state.selected_topic_id
@@ -3183,6 +3307,9 @@ def step_year_selection():
     
     st.markdown("---")
     
+    # Remove the Reset Cached Data button as per requirement
+    
+    st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("📊 Generate Reports", type="primary", use_container_width=True):
@@ -3195,16 +3322,22 @@ def step_year_selection():
                 st.error("❌ Invalid year format. Please check your input.")
                 return
             
-            # Clear cached data if years have changed
+            # Clear cached data when years change
             if 'selected_years' in st.session_state and st.session_state.selected_years != years:
-                keys_to_clear = [
-                    'all_works', 'enriched_count', 'pdf_cache', 
-                    'all_reports_generated', 'filtered_articles',
-                    'search_query', 'search_results_count'
-                ]
-                for key in keys_to_clear:
-                    if key in st.session_state:
-                        del st.session_state[key]
+                if 'all_works' in st.session_state:
+                    del st.session_state.all_works
+                if 'enriched_count' in st.session_state:
+                    del st.session_state.enriched_count
+                if 'pdf_cache' in st.session_state:
+                    del st.session_state.pdf_cache
+                if 'all_reports_generated' in st.session_state:
+                    del st.session_state.all_reports_generated
+                if 'filtered_articles' in st.session_state:
+                    del st.session_state.filtered_articles
+                if 'search_query' in st.session_state:
+                    del st.session_state.search_query
+                if 'search_results_count' in st.session_state:
+                    del st.session_state.search_results_count
             
             st.session_state.selected_years = years
             st.session_state.years_input = years_input
@@ -3229,6 +3362,7 @@ def step_results():
     with col_back:
         if st.button("← Back", use_container_width=True):
             st.session_state.current_step = 4
+            # Keep years but allow changes
             st.rerun()
     
     topic_id = st.session_state.selected_topic_id
@@ -3270,9 +3404,6 @@ def step_results():
     else:
         current_articles = enriched_works
     
-    # Create unique filter ID for caching
-    filter_hash = hashlib.md5(str(sorted([a.get('doi', '') for a in current_articles])).encode()).hexdigest()[:16]
-    
     # Statistics
     total_articles = len(current_articles)
     total_citations = sum(w.get('cited_by_count', 0) for w in current_articles)
@@ -3307,28 +3438,29 @@ def step_results():
             key="sort_country"
         )
     
+    # Convert UI options to function parameters
+    sort_publisher_param = 'alphabetical' if sort_publisher == "Alphabetical" else 'by_count'
+    sort_citations_param = 'citations_per_year' if sort_citations == "Citations per Year" else ('total_citations' if sort_citations == "Total Citations" else 'publication_date')
+    sort_country_param = 'alphabetical' if sort_country == "Alphabetical" else 'by_count'
+    
     # Generate groupings with caching using unique keys
     with st.spinner("Generating report groupings..."):
         # Create unique cache keys based on all parameters
-        articles_tuple = tuple(current_articles)
+        filter_hash = hashlib.md5(str(sorted([a.get('doi', '') for a in current_articles])).encode()).hexdigest()[:8]
         
-        # For publisher hierarchy, include sort option in cache key via function parameters
-        publisher_hierarchy = cached_group_articles_by_publisher_journal(articles_tuple)
-        country_hierarchy = cached_group_articles_by_country_affiliation(articles_tuple)
+        publisher_hierarchy = cached_group_articles_by_publisher_journal(
+            tuple(current_articles), 
+            sort_publisher_param
+        )
         
-        # Apply sorting based on user selection
-        if sort_publisher == "By Article Count":
-            publisher_hierarchy = sort_hierarchy_by_article_count(publisher_hierarchy)
+        country_hierarchy = cached_group_articles_by_country_affiliation(
+            tuple(current_articles), 
+            sort_country_param
+        )
         
-        if sort_country == "By Article Count":
-            country_hierarchy = sort_hierarchy_by_article_count(country_hierarchy)
-        
-        # For citations, include sort_by parameter
         citations_sorted = cached_sort_articles_by_citations(
-            articles_tuple, 
-            'total_citations' if sort_citations == "Total Citations" 
-            else 'publication_date' if sort_citations == "Publication Date (Newest First)"
-            else 'citations_per_year'
+            tuple(current_articles), 
+            sort_citations_param
         )
     
     col1, col2, col3, col4 = st.columns(4)
@@ -3385,10 +3517,13 @@ def step_results():
     if 'all_reports_generated' not in st.session_state:
         st.session_state.all_reports_generated = False
     
-    # Create unique cache keys incorporating all parameters including filter
-    cache_key_publisher = f"publisher_{filter_hash}_{'_'.join(map(str, years))}_{sort_publisher}"
-    cache_key_citations = f"citations_{filter_hash}_{'_'.join(map(str, years))}_{sort_citations}"
-    cache_key_country = f"country_{filter_hash}_{'_'.join(map(str, years))}_{sort_country}"
+    # Create unique cache keys including all parameters
+    filter_hash = hashlib.md5(str(sorted([a.get('doi', '') for a in current_articles])).encode()).hexdigest()[:8]
+    years_hash = hashlib.md5(','.join(map(str, years)).encode()).hexdigest()[:8]
+    
+    cache_key_publisher = f"publisher_{topic_id}_{years_hash}_{filter_hash}_{sort_publisher_param}"
+    cache_key_citations = f"citations_{topic_id}_{years_hash}_{filter_hash}_{sort_citations_param}"
+    cache_key_country = f"country_{topic_id}_{years_hash}_{filter_hash}_{sort_country_param}"
     
     # Advanced Search button
     col_adv1, col_adv2, col_adv3 = st.columns([1, 2, 1])
@@ -3412,7 +3547,8 @@ def step_results():
                         st.session_state.pdf_cache[cache_key_publisher] = generate_pdf_by_publisher_journal(
                             journal_name, journal_abbr, years,
                             publisher_hierarchy, logo_path,
-                            "Report by Publisher & Journal"
+                            "Report by Publisher & Journal",
+                            sort_publisher_param
                         )
                     progress_bar.progress(0.33)
                     
@@ -3421,7 +3557,8 @@ def step_results():
                         st.session_state.pdf_cache[cache_key_citations] = generate_pdf_by_citations(
                             journal_name, journal_abbr, years,
                             citations_sorted, logo_path,
-                            "Report by Citations per Year"
+                            "Report by Citations",
+                            sort_citations_param
                         )
                     progress_bar.progress(0.66)
                     
@@ -3430,7 +3567,8 @@ def step_results():
                         st.session_state.pdf_cache[cache_key_country] = generate_pdf_by_country_affiliation(
                             journal_name, journal_abbr, years,
                             country_hierarchy, logo_path,
-                            "Report by Country & Affiliation"
+                            "Report by Country & Affiliation",
+                            sort_country_param
                         )
                     progress_bar.progress(1.0)
                     
@@ -3462,15 +3600,16 @@ def step_results():
                 file_name=filename,
                 mime="application/pdf",
                 use_container_width=True,
-                key="pdf_publisher_download"
+                key=f"pdf_publisher_download_{cache_key_publisher}"
             )
         else:
-            if st.button("📄 Generate Publisher Report", key="gen_publisher", use_container_width=True):
+            if st.button("📄 Generate Publisher Report", key=f"gen_publisher_{cache_key_publisher}", use_container_width=True):
                 with st.spinner("Generating Publisher Report..."):
                     pdf_data = generate_pdf_by_publisher_journal(
                         journal_name, journal_abbr, years,
                         publisher_hierarchy, logo_path,
-                        "Report by Publisher & Journal"
+                        "Report by Publisher & Journal",
+                        sort_publisher_param
                     )
                     st.session_state.pdf_cache[cache_key_publisher] = pdf_data
                     st.rerun()
@@ -3492,15 +3631,16 @@ def step_results():
                 file_name=filename,
                 mime="application/pdf",
                 use_container_width=True,
-                key="pdf_citations_download"
+                key=f"pdf_citations_download_{cache_key_citations}"
             )
         else:
-            if st.button("📄 Generate Citations Report", key="gen_citations", use_container_width=True):
+            if st.button("📄 Generate Citations Report", key=f"gen_citations_{cache_key_citations}", use_container_width=True):
                 with st.spinner("Generating Citations Report..."):
                     pdf_data = generate_pdf_by_citations(
                         journal_name, journal_abbr, years,
                         citations_sorted, logo_path,
-                        "Report by Citations per Year"
+                        "Report by Citations",
+                        sort_citations_param
                     )
                     st.session_state.pdf_cache[cache_key_citations] = pdf_data
                     st.rerun()
@@ -3522,15 +3662,16 @@ def step_results():
                 file_name=filename,
                 mime="application/pdf",
                 use_container_width=True,
-                key="pdf_country_download"
+                key=f"pdf_country_download_{cache_key_country}"
             )
         else:
-            if st.button("📄 Generate Country Report", key="gen_country", use_container_width=True):
+            if st.button("📄 Generate Country Report", key=f"gen_country_{cache_key_country}", use_container_width=True):
                 with st.spinner("Generating Country Report..."):
                     pdf_data = generate_pdf_by_country_affiliation(
                         journal_name, journal_abbr, years,
                         country_hierarchy, logo_path,
-                        "Report by Country & Affiliation"
+                        "Report by Country & Affiliation",
+                        sort_country_param
                     )
                     st.session_state.pdf_cache[cache_key_country] = pdf_data
                     st.rerun()
@@ -3572,7 +3713,7 @@ def step_results():
                         'keyword_counter', 'successful', 'failed', 'selected_topic',
                         'selected_topic_id', 'selected_years', 'all_works', 
                         'enriched_count', 'years_input', 'pdf_cache', 'all_reports_generated',
-                        'filtered_articles']
+                        'filtered_articles', 'search_query', 'search_results_count']
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
@@ -3700,11 +3841,17 @@ def step_advanced_search():
                 year = article.get('publication_year', '')
                 journal = article.get('journal_name', '')
                 
+                # Get publication type info
+                type_label = article.get('type_label', 'Other')
+                type_icon = article.get('type_icon', '📎')
+                type_color = article.get('type_color', '#7f8c8d')
+                
                 st.markdown(f"""
                 <div class="result-card" style="padding: 10px; margin-bottom: 6px;">
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <span style="font-weight: 600; color: #667eea;">{idx}.</span>
                         <span style="font-weight: 500;">{title}</span>
+                        <span style="color: {type_color}; font-size: 0.85rem;">{type_icon} {type_label}</span>
                     </div>
                     <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
                         {f'Year: {year} ' if year else ''}
