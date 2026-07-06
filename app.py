@@ -591,6 +591,43 @@ def format_year_filter_for_filename(years: List[int]) -> str:
     
     return ",".join(ranges)
 
+def calculate_toc_indices(total_count: int) -> List[int]:
+    """
+    Calculate which article indices to display in Table of Contents.
+    Uses multiples of 5, 10, or 50 depending on total count.
+    Always includes first and last articles.
+    
+    Args:
+        total_count: Total number of articles
+        
+    Returns:
+        List of 1-based indices to display in TOC
+    """
+    if total_count <= 0:
+        return []
+    
+    # If 25 or fewer articles, show all
+    if total_count <= 25:
+        return list(range(1, total_count + 1))
+    
+    # Always include first and last
+    indices = [1, total_count]
+    
+    # Determine step based on total count
+    if total_count <= 100:
+        step = 5
+    elif total_count <= 500:
+        step = 10
+    else:
+        step = 50
+    
+    # Add intermediate indices with the calculated step
+    for i in range(step, total_count, step):
+        if i not in indices:
+            indices.append(i)
+    
+    return sorted(indices)
+
 # ============================================================================
 # ASYNCIO + AIOHTTP CLIENT
 # ============================================================================
@@ -2349,6 +2386,24 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
         fontName=russian_font_name
     )
     
+    toc_article_style = ParagraphStyle(
+        'TOCArticleStyle',
+        parent=styles['Normal'],
+        fontSize=9,
+        textColor=colors.HexColor('#2C3E50'),
+        spaceAfter=3,
+        fontName=russian_font_name
+    )
+    
+    toc_more_style = ParagraphStyle(
+        'TOCMoreStyle',
+        parent=styles['Normal'],
+        fontSize=9,
+        textColor=colors.HexColor('#7F8C8D'),
+        spaceAfter=3,
+        fontName=russian_font_name
+    )
+    
     story = []
     
     total_articles = len(articles)
@@ -2416,11 +2471,19 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
     story.append(stats_table)
     story.append(PageBreak())
     
+    # ===== TABLE OF CONTENTS WITH INTELLIGENT INDEX SELECTION =====
     story.append(Paragraph("Table of Contents", title_style))
     story.append(Spacer(1, 0.5*cm))
     
-    for idx, article in enumerate(articles[:20], 1):
+    # Calculate which article indices to show in TOC
+    toc_indices = calculate_toc_indices(total_articles)
+    
+    # Display selected articles in TOC
+    for idx in toc_indices:
+        article = articles[idx - 1]  # Convert 1-based index to 0-based
         title = clean_text(article.get('title', 'No title')[:60])
+        
+        # Format the display text based on sort option
         if sort_option == 'citations_per_year':
             citations = article.get('citations_per_year', 0)
             display_text = f"{idx}. {title}... — {citations:.1f} citations/year"
@@ -2431,16 +2494,18 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
             pub_date = article.get('publication_date', '')
             display_text = f"{idx}. {title}... — {pub_date}"
         
+        # Create anchor for this article
         anchor_id = f"article_{hashlib.md5(str(idx).encode('utf-8')).hexdigest()[:8]}"
-        story.append(Paragraph(f'<a href="#{anchor_id}">{display_text}</a>', 
-                              ParagraphStyle('TOCArticleStyle', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#2C3E50'), spaceAfter=3, fontName=russian_font_name)))
+        story.append(Paragraph(f'<a href="#{anchor_id}">{display_text}</a>', toc_article_style))
     
-    if len(articles) > 20:
-        story.append(Paragraph(f"... and {len(articles) - 20} more articles", 
-                              ParagraphStyle('TOCMoreStyle', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#7F8C8D'), spaceAfter=3, fontName=russian_font_name)))
+    # Show message about omitted articles if any
+    if len(toc_indices) < total_articles:
+        omitted_count = total_articles - len(toc_indices)
+        story.append(Paragraph(f"... and {omitted_count} more articles not shown in TOC", toc_more_style))
     
     story.append(PageBreak())
     
+    # ===== MAIN CONTENT =====
     sort_display_title = sort_display
     story.append(Paragraph(f"Articles by {sort_display_title}", title_style))
     story.append(Spacer(1, 0.5*cm))
