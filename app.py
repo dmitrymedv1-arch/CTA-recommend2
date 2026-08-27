@@ -22,22 +22,10 @@ from typing import List, Dict, Tuple, Optional, Set, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import io
-from reportlab.lib.pagesizes import A4, letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-from reportlab.lib.units import inch, cm
-from reportlab.pdfgen import canvas
-from reportlab.platypus import Image
-from reportlab.platypus.flowables import Flowable
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
-from reportlab.platypus import Image
-from reportlab.platypus import KeepTogether
 import xlsxwriter
 from PIL import Image as PILImage
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 import zipfile
+import html
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -1711,455 +1699,176 @@ def parse_complex_search_query(query: str) -> Dict[str, Any]:
     pass
 
 # ============================================================================
-# PDF REPORT GENERATION FUNCTIONS
+# HTML REPORT GENERATION FUNCTIONS (NEW - REPLACES PDF)
 # ============================================================================
 
-def register_russian_font():
-    """Register a font that supports Cyrillic characters."""
-    import os
-    
-    font_found = False
-    russian_font_name = 'Helvetica'
-    
-    font_paths = [
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-        '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
-        '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
-        '/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf',
-        '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
-        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-        '/System/Library/Fonts/Helvetica.ttc',
-        '/System/Library/Fonts/Arial.ttf',
-        '/Library/Fonts/Arial.ttf',
-        'C:/Windows/Fonts/arial.ttf',
-        'C:/Windows/Fonts/times.ttf',
-    ]
-    
-    for font_path in font_paths:
-        if os.path.exists(font_path):
-            try:
-                pdfmetrics.registerFont(TTFont('RussianFont', font_path))
-                russian_font_name = 'RussianFont'
-                font_found = True
-                logger.info(f"Registered font from: {font_path}")
-                break
-            except Exception as e:
-                logger.warning(f"Failed to register {font_path}: {e}")
-                continue
-    
-    if not font_found:
-        logger.warning("No Cyrillic font found, text may not display correctly")
-        russian_font_name = 'Helvetica'
-    
-    return russian_font_name
-
-def clean_text(text):
-    """
-    Clean text for PDF display, preserving allowed special characters including slash.
-    """
+def escape_html(text: str) -> str:
+    """Escape HTML special characters."""
     if text is None:
         return ""
-    if not text:
-        return ""
-    if isinstance(text, bytes):
-        text = text.decode('utf-8', 'ignore')
-    import unicodedata
-    text = unicodedata.normalize('NFC', str(text))
-    text = re.sub(r'<[^>]+>', '', text)
-    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    # Allow: letters (Latin and Cyrillic), spaces, dots, commas, hyphens, apostrophes, parentheses, digits, and slash
-    allowed_pattern = r'[^a-zA-Zа-яА-ЯёЁ\s\.\,\-\'\(\)\d\/]'
-    text = re.sub(allowed_pattern, '', text)
-    return text
+    return html.escape(str(text))
 
-def clean_doi_url(url):
-    if not url:
-        return ""
-    url = url.replace('&', '&amp;')
-    url = url.replace('"', '&quot;')
-    url = url.replace("'", '&apos;')
-    url = url.replace('<', '&lt;')
-    url = url.replace('>', '&gt;')
-    return url
-
-def add_logo_to_pdf(story, logo_path, max_width=150, max_height=150, add_spacer=True):
-    """
-    Add logo to PDF with preserved aspect ratio.
-    Returns True if logo was successfully added, False otherwise.
-    """
-    if not logo_path or not os.path.exists(logo_path):
-        return False
+def get_color_scale_html(value: float, max_val: float, min_val: float = 0, unit: str = '', decimals: int = 0) -> str:
+    """Generate HTML for a color-scaled value."""
+    if max_val <= 0:
+        return f'<span class="color-scale-value" style="background: #e9ecef; color: #6c757d;">{value}{unit}</span>'
     
-    try:
-        from PIL import Image as PILImage
-        pil_img = PILImage.open(logo_path)
-        original_width, original_height = pil_img.size
-        pil_img.close()
-        
-        # Calculate scale preserving aspect ratio
-        width_ratio = max_width / original_width
-        height_ratio = max_height / original_height
-        scale_ratio = min(width_ratio, height_ratio)
-        
-        new_width = original_width * scale_ratio
-        new_height = original_height * scale_ratio
-        
-        logo = Image(logo_path, width=new_width, height=new_height)
-        logo.hAlign = 'CENTER'
-        story.append(logo)
-        
-        if add_spacer:
-            story.append(Spacer(1, 0.5*cm))
-        return True
-    except Exception as e:
-        logger.warning(f"Could not load logo: {e}")
-        return False
+    ratio = (value - min_val) / (max_val - min_val) if max_val > min_val else 0.5
+    ratio = max(0, min(1, ratio))
+    
+    # Blue to purple gradient
+    r = int(102 + (118 - 102) * ratio)
+    g = int(126 + (75 - 126) * ratio)
+    b = int(234 + (162 - 234) * ratio)
+    
+    bg_color = f"rgb({r}, {g}, {b})"
+    text_color = "#1a1a1a" if ratio < 0.6 else "#ffffff"
+    
+    if decimals > 0:
+        value_str = f"{value:.{decimals}f}"
+    else:
+        value_str = str(int(value)) if value == int(value) else f"{value:.1f}"
+    
+    return f'<span class="color-scale-value" style="background: {bg_color}; color: {text_color};">{value_str}{unit}</span>'
 
-def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, years: List[int],
-                                      hierarchy: Dict, logo_path: str = None,
-                                      report_title: str = "Report by Publisher & Journal",
-                                      sort_option: str = 'alphabetical') -> bytes:
-    """Generate PDF report grouping articles by Publisher -> Journal."""
-    russian_font_name = register_russian_font()
+def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, years: List[int],
+                                       hierarchy: Dict, report_title: str = "Report by Publisher & Journal",
+                                       sort_option: str = 'alphabetical') -> str:
+    """Generate HTML report grouping articles by Publisher -> Journal."""
     
     # Get filter info from session_state
     search_query = st.session_state.get('search_query', '')
     has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
-    
-    buffer = io.BytesIO()
-    
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        topMargin=1.5*cm,
-        bottomMargin=1.5*cm,
-        leftMargin=2*cm,
-        rightMargin=2*cm
-    )
-    
-    styles = getSampleStyleSheet()
-    
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Normal'],
-        fontSize=22,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=12,
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    subtitle_style = ParagraphStyle(
-        'CustomSubtitle',
-        parent=styles['Normal'],
-        fontSize=14,
-        textColor=colors.HexColor('#34495E'),
-        spaceAfter=8,
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    publisher_style = ParagraphStyle(
-        'PublisherStyle',
-        parent=styles['Normal'],
-        fontSize=18,
-        textColor=colors.HexColor('#667eea'),
-        spaceAfter=10,
-        spaceBefore=20,
-        fontName=russian_font_name
-    )
-    
-    journal_style = ParagraphStyle(
-        'JournalStyle',
-        parent=styles['Normal'],
-        fontSize=15,
-        textColor=colors.HexColor('#764ba2'),
-        spaceAfter=8,
-        spaceBefore=12,
-        leftIndent=20,
-        fontName=russian_font_name
-    )
-    
-    article_title_style = ParagraphStyle(
-        'ArticleTitle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=5,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    authors_style = ParagraphStyle(
-        'AuthorsStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=3,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_default = ParagraphStyle(
-        'MetaDefault',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#27ae60'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_preprint = ParagraphStyle(
-        'MetaPreprint',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#9b59b6'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_book = ParagraphStyle(
-        'MetaBook',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#e67e22'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_conference = ParagraphStyle(
-        'MetaConference',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#2980b9'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_other = ParagraphStyle(
-        'MetaOther',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#7f8c8d'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    citation_style = ParagraphStyle(
-        'CitationStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#27AE60'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    toc_publisher_style = ParagraphStyle(
-        'TOCPublisherStyle',
-        parent=styles['Normal'],
-        fontSize=12,
-        textColor=colors.HexColor('#667eea'),
-        spaceAfter=6,
-        fontName=russian_font_name
-    )
-    
-    toc_journal_style = ParagraphStyle(
-        'TOCJournalStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#764ba2'),
-        spaceAfter=4,
-        leftIndent=15,
-        fontName=russian_font_name
-    )
-    
-    intro_style = ParagraphStyle(
-        'IntroStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=20,
-        alignment=TA_JUSTIFY,
-        fontName=russian_font_name
-    )
-    
-    footer_style = ParagraphStyle(
-        'FooterStyle',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#95A5A6'),
-        spaceBefore=15,
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    separator_style = ParagraphStyle(
-        'Separator',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#BDC3C7'),
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    conclusion_style = ParagraphStyle(
-        'ConclusionStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=20,
-        alignment=TA_JUSTIFY,
-        fontName=russian_font_name
-    )
-    
-    story = []
     
     total_articles = sum(len(articles) for publisher in hierarchy.values() 
                         for journal in publisher.values() 
                         for articles in [journal])
     total_publishers = len(hierarchy)
     
-    story.append(Spacer(1, 2*cm))
+    # Primary colors
+    primary = '#667eea'
+    secondary = '#764ba2'
     
-    # Add logo at beginning with preserved aspect ratio
-    add_logo_to_pdf(story, logo_path, max_width=200, max_height=200, add_spacer=True)
+    # Build navigation items
+    nav_items = []
+    nav_items.append(f'<a href="#overview"><span class="nav-icon">📋</span> Overview</a>')
+    nav_items.append(f'<a href="#publications"><span class="nav-icon">📄</span> Publications</a>')
     
-    story.append(Paragraph("Analytical Report", title_style))
-    story.append(Paragraph(f"«{clean_text(journal_name)}»", subtitle_style))
-    story.append(Spacer(1, 1*cm))
+    for publisher in hierarchy.keys():
+        publisher_id = hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]
+        nav_items.append(f'<a href="#publisher_{publisher_id}"><span class="nav-icon">📚</span> {escape_html(publisher[:30])}</a>')
     
-    years_str = format_year_filter_for_filename(years)
-    story.append(Paragraph(f"Publication period: {years_str}", subtitle_style))
-    story.append(Spacer(1, 1.5*cm))
-    
-    # Format intro text with filter info
-    if search_query and has_filter:
-        intro_text = f"""
-        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-        grouped by Publisher and Journal.
-        
-        <b>Applied filter:</b> «{clean_text(search_query)}»
-        <b>Sorting:</b> {sort_option.replace('_', ' ').title()}
-        """
-    else:
-        intro_text = f"""
-        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-        grouped by Publisher and Journal.
-        
-        <b>Sorting:</b> {sort_option.replace('_', ' ').title()}
-        """
-    
-    story.append(Paragraph(intro_text, intro_style))
-    story.append(Spacer(1, 1*cm))
-    
-    stats_data = [
-        ["Metric", "Value"],
-        ["Total Articles", str(total_articles)],
-        ["Publishers", str(total_publishers)],
-        ["Report Type", report_title],
-        ["Sorting", sort_option.replace('_', ' ').title()]
-    ]
-    
-    stats_table = Table(stats_data, colWidths=[doc.width/2.5, doc.width/3])
-    stats_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), russian_font_name),
-        ('FONTSIZE', (0, 0), (-1, 0), 11),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D5DBDB')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F2F4F4')]),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    ]))
-    
-    story.append(stats_table)
-    story.append(PageBreak())
-    
-    story.append(Paragraph("Table of Contents", title_style))
-    story.append(Spacer(1, 0.5*cm))
-    
+    # Build TOC items
+    toc_items = []
     for publisher, journals in hierarchy.items():
         publisher_articles = sum(len(articles) for articles in journals.values())
-        anchor_id = f"publisher_{hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]}"
-        story.append(Paragraph(f'<a href="#{anchor_id}"><b>{clean_text(publisher)}</b> — {publisher_articles} articles</a>', toc_publisher_style))
+        publisher_id = hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]
+        toc_items.append(f'<div class="toc-item"><a href="#publisher_{publisher_id}">{escape_html(publisher)} ({publisher_articles} articles)</a></div>')
         
         for journal, articles in journals.items():
             journal_articles = len(articles)
-            journal_anchor_id = f"journal_{hashlib.md5(f"{publisher}_{journal}".encode('utf-8')).hexdigest()[:8]}"
-            story.append(Paragraph(f'&nbsp;&nbsp;&nbsp;&nbsp;<a href="#{journal_anchor_id}">{clean_text(journal)}</a> — {journal_articles} articles', toc_journal_style))
-        
-        story.append(Spacer(1, 0.3*cm))
+            journal_id = hashlib.md5(f"{publisher}_{journal}".encode('utf-8')).hexdigest()[:8]
+            toc_items.append(f'<div class="toc-item toc-sub"><a href="#journal_{journal_id}">└ {escape_html(journal)} ({journal_articles} articles)</a></div>')
     
-    story.append(PageBreak())
+    # Build main content
+    main_content = []
     
+    # Overview section
+    main_content.append(f'''
+    <div id="overview" class="section">
+        <div class="section-header" onclick="toggleSection('overview_content')">
+            <div class="section-title">
+                <span class="icon">📋</span> Overview
+                <span class="section-badge">{total_articles} articles</span>
+            </div>
+            <span class="toggle-indicator" id="overview_indicator">▼</span>
+        </div>
+        <div class="section-divider"></div>
+        <div id="overview_content" class="section-content">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value">{total_articles}</div>
+                    <div class="metric-label">Total Articles</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{total_publishers}</div>
+                    <div class="metric-label">Publishers</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{len(years)}</div>
+                    <div class="metric-label">Years</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{format_year_filter_for_filename(years)}</div>
+                    <div class="metric-label">Period</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 15px; padding: 12px 16px; background: #f8f9fa; border-radius: 8px; border-left: 3px solid {primary};">
+                <strong>Report Type:</strong> {report_title}<br>
+                <strong>Sorting:</strong> {sort_option.replace('_', ' ').title()}
+                {f'<br><strong>Applied Filter:</strong> «{escape_html(search_query)}»' if search_query and has_filter else ''}
+            </div>
+            
+            <div style="margin-top: 15px;">
+                <h3 style="color: {primary}; font-size: 16px;">📑 Table of Contents</h3>
+                <div style="max-height: 300px; overflow-y: auto; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                    {''.join(toc_items)}
+                </div>
+            </div>
+        </div>
+    </div>
+    ''')
+    
+    # Publications section
+    main_content.append(f'''
+    <div id="publications" class="section">
+        <div class="section-header" onclick="toggleSection('publications_content')">
+            <div class="section-title">
+                <span class="icon">📄</span> Publications
+                <span class="section-badge">{total_articles} articles</span>
+            </div>
+            <span class="toggle-indicator" id="publications_indicator">▼</span>
+        </div>
+        <div class="section-divider"></div>
+        <div id="publications_content" class="section-content">
+    ''')
+    
+    # Publisher -> Journal hierarchy
     for publisher, journals in hierarchy.items():
         publisher_articles = sum(len(articles) for articles in journals.values())
-        anchor_id = f"publisher_{hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]}"
-        anchor_para = Paragraph(f'<a name="{anchor_id}"/>', ParagraphStyle('AnchorStyle', parent=styles['Normal'], fontSize=1, textColor=colors.white, fontName=russian_font_name))
-        story.append(anchor_para)
+        publisher_id = hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]
         
-        story.append(Paragraph(f"{clean_text(publisher)} — {publisher_articles} articles", publisher_style))
-        story.append(Spacer(1, 0.3*cm))
+        main_content.append(f'''
+        <div id="publisher_{publisher_id}" style="margin-bottom: 20px;">
+            <h3 style="color: {primary}; font-size: 18px; margin-bottom: 8px;">📚 {escape_html(publisher)} <span class="section-badge">{publisher_articles} articles</span></h3>
+        ''')
         
         for journal, articles in journals.items():
-            journal_anchor_id = f"journal_{hashlib.md5(f"{publisher}_{journal}".encode('utf-8')).hexdigest()[:8]}"
-            journal_anchor_para = Paragraph(f'<a name="{journal_anchor_id}"/>', ParagraphStyle('AnchorStyle', parent=styles['Normal'], fontSize=1, textColor=colors.white, fontName=russian_font_name))
-            story.append(journal_anchor_para)
+            journal_id = hashlib.md5(f"{publisher}_{journal}".encode('utf-8')).hexdigest()[:8]
             
-            story.append(Paragraph(f"&nbsp;&nbsp;{clean_text(journal)} — {len(articles)} articles", journal_style))
-            story.append(Spacer(1, 0.2*cm))
+            main_content.append(f'''
+            <div id="journal_{journal_id}" style="margin: 12px 0 12px 20px;">
+                <h4 style="color: {secondary}; font-size: 15px; margin-bottom: 6px;">📖 {escape_html(journal)} <span class="section-badge" style="background: {secondary};">{len(articles)} articles</span></h4>
+            ''')
             
             for idx, article in enumerate(articles, 1):
-                title = clean_text(article.get('title', 'No title'))
-                story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{idx}. {title}", article_title_style))
-                
-                authors = clean_text(article.get('authors', 'Authors not specified'))
-                story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Authors:</b> {authors}", authors_style))
-                
-                # Single output of affiliations with proper separator
-                affs = clean_text(article.get('affiliations_str', ''))
-                if affs and affs != 'No affiliations specified':
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style_default))
-                
-                # Publication type badge
-                type_label = article.get('type_label', 'Other')
-                type_icon = article.get('type_icon', '📎')
-                type_color = article.get('type_color', '#7f8c8d')
-                
-                # Select appropriate style based on type
-                if type_label == 'Preprint':
-                    meta_style = meta_style_preprint
-                elif type_label == 'Book/Chapter':
-                    meta_style = meta_style_book
-                elif type_label == 'Conference':
-                    meta_style = meta_style_conference
-                elif type_label == 'Article':
-                    meta_style = meta_style_default
-                else:
-                    meta_style = meta_style_other
-                
-                story.append(Paragraph(
-                    f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='{type_color}'><b>{type_icon} {type_label}</b></font>",
-                    meta_style
-                ))
-                
-                # Journal name
-                journal_name_article = clean_text(article.get('journal_name', ''))
-                if journal_name_article:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Journal:</b> {journal_name_article}", meta_style_default))
-                
+                title = escape_html(article.get('title', 'No title'))
+                authors = escape_html(article.get('authors', 'Authors not specified'))
+                affiliations = escape_html(article.get('affiliations_str', ''))
                 year = article.get('publication_year', '')
                 pub_date = article.get('publication_date', '')
                 volume = article.get('volume', '')
                 issue = article.get('issue', '')
                 pages = article.get('pages', '')
+                citations = article.get('cited_by_count', 0)
+                citations_per_year = article.get('citations_per_year', 0)
+                references = article.get('referenced_works_count', 0)
+                oa_status = article.get('oa_status', 'Closed Access')
+                type_label = article.get('type_label', 'Other')
+                type_icon = article.get('type_icon', '📎')
+                type_color = article.get('type_color', '#7f8c8d')
+                doi_url = article.get('doi_url', '')
                 
                 meta_parts = []
                 if year:
@@ -2172,392 +1881,550 @@ def generate_pdf_by_publisher_journal(journal_name: str, journal_abbr: str, year
                     meta_parts.append(f"Iss. {issue}")
                 if pages:
                     meta_parts.append(f"pp. {pages}")
+                meta_str = ', '.join(meta_parts) if meta_parts else ''
                 
-                if meta_parts:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{', '.join(meta_parts)}", meta_style_default))
-                
-                citations = article.get('cited_by_count', 0)
-                citations_per_year = article.get('citations_per_year', 0)
-                references = article.get('referenced_works_count', 0)
-                oa_status = article.get('oa_status', 'Closed Access')
-                
-                citation_text = f"<b>Citations:</b> {citations} | <b>per year:</b> {citations_per_year:.1f} | <b>References:</b> {references} | <b>OA:</b> {oa_status}"
-                story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{citation_text}", citation_style))
-                
-                doi_url = article.get('doi_url', '')
-                if doi_url:
-                    doi_url_clean = clean_doi_url(doi_url)
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style_default))
-                
-                story.append(Spacer(1, 0.15*cm))
-                
-                if idx < len(articles):
-                    story.append(Paragraph("&nbsp;&nbsp;&nbsp;&nbsp;" + "─" * 40, separator_style))
-                    story.append(Spacer(1, 0.1*cm))
+                main_content.append(f'''
+                <div class="article-item" style="margin: 8px 0 8px 20px; padding: 10px 14px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
+                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                        <span style="font-weight: 600; color: {primary};">{idx}.</span>
+                        <span style="font-weight: 500;">{title}</span>
+                        <span style="color: {type_color}; font-size: 0.85rem; background: {type_color}20; padding: 0 8px; border-radius: 10px;">{type_icon} {type_label}</span>
+                    </div>
+                    <div style="font-size: 0.9rem; color: #555; margin-top: 4px;">
+                        <strong>Authors:</strong> {authors}
+                    </div>
+                    {f'<div style="font-size: 0.85rem; color: #666;"><strong>Affiliations:</strong> {affiliations}</div>' if affiliations and affiliations != 'No affiliations specified' else ''}
+                    {f'<div style="font-size: 0.85rem; color: #666;"><strong>Journal:</strong> {escape_html(article.get("journal_name", ""))}</div>' if article.get("journal_name") else ''}
+                    {f'<div style="font-size: 0.85rem; color: #666;">{meta_str}</div>' if meta_str else ''}
+                    <div style="font-size: 0.85rem; color: #666; display: flex; flex-wrap: wrap; gap: 12px;">
+                        <span><strong>Citations:</strong> {citations}</span>
+                        <span><strong>Per year:</strong> {citations_per_year:.1f}</span>
+                        <span><strong>References:</strong> {references}</span>
+                        <span><strong>OA:</strong> {oa_status}</span>
+                    </div>
+                    {f'<div style="font-size: 0.8rem; margin-top: 2px;"><a href="{doi_url}" target="_blank" style="color: #2980B9; text-decoration: none;">{doi_url}</a></div>' if doi_url else ''}
+                </div>
+                ''')
             
-            story.append(Spacer(1, 0.3*cm))
+            main_content.append('</div>')
         
-        story.append(Spacer(1, 0.3*cm))
-        story.append(PageBreak())
+        main_content.append('</div>')
     
-    story.append(Paragraph("Conclusion", title_style))
-    story.append(Spacer(1, 0.5*cm))
+    main_content.append('</div></div>')
     
-    conclusion_text = f"""
-    This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-    grouped by {total_publishers} publishers and their respective journals.
+    # Footer
+    main_content.append(f'''
+    <div class="footer">
+        <p>© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+        <p>Report generated using CTA Article Recommender Pro*2</p>
+    </div>
+    ''')
     
-    The articles are organized alphabetically by publisher and journal name.
-    Within each journal, articles are sorted by citations per year (descending).
-    """
+    # Complete HTML
+    html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{escape_html(journal_name)} - Publisher & Journal Report</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Times New Roman', 'DejaVu Serif', serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            color: #333;
+        }}
+        .report-wrapper {{
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            border-radius: 10px;
+            overflow: hidden;
+        }}
+        
+        /* Sidebar */
+        .sidebar {{
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 260px;
+            height: 100vh;
+            background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+            color: white;
+            padding: 20px 16px;
+            overflow-y: auto;
+            z-index: 1000;
+            box-shadow: 2px 0 20px rgba(0,0,0,0.15);
+        }}
+        .sidebar::-webkit-scrollbar {{ width: 4px; }}
+        .sidebar::-webkit-scrollbar-thumb {{ background: rgba(255,255,255,0.3); border-radius: 4px; }}
+        
+        .sidebar h3 {{
+            margin-bottom: 16px;
+            font-size: 16px;
+            font-weight: 700;
+            color: white;
+            border-bottom: 2px solid rgba(255,255,255,0.3);
+            padding-bottom: 12px;
+            letter-spacing: 0.5px;
+            word-wrap: break-word;
+        }}
+        .sidebar a {{
+            color: white;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 12px;
+            margin: 2px 0;
+            border-radius: 6px;
+            transition: all 0.3s;
+            font-size: 12px;
+        }}
+        .sidebar a:hover {{
+            background: rgba(255,255,255,0.2);
+            transform: translateX(4px);
+        }}
+        .sidebar a .nav-icon {{
+            font-size: 14px;
+            width: 22px;
+            text-align: center;
+        }}
+        
+        /* Main Content */
+        .main-content {{
+            margin-left: 260px;
+            padding: 25px 35px;
+        }}
+        
+        /* Header */
+        .header {{
+            background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+            color: white;
+            padding: 25px 35px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }}
+        .header h1 {{
+            color: white;
+            margin: 0;
+            font-size: 26px;
+            font-weight: 700;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            word-wrap: break-word;
+        }}
+        .header .subtitle {{
+            opacity: 0.9;
+            margin-top: 4px;
+            font-size: 13px;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }}
+        
+        /* Sections */
+        .section {{
+            background: white;
+            border-radius: 12px;
+            padding: 20px 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            border: 1px solid #f0f0f0;
+            transition: all 0.3s;
+        }}
+        .section:hover {{
+            box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+        }}
+        
+        .section-header {{
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+            padding: 4px 0;
+        }}
+        .section-header:hover .section-title {{
+            color: {primary};
+        }}
+        .section-title {{
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #2C3E50;
+            transition: color 0.3s;
+        }}
+        .section-title .icon {{
+            font-size: 22px;
+        }}
+        .section-title .section-badge {{
+            background: linear-gradient(135deg, {primary}, {secondary});
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 6px;
+        }}
+        .section-divider {{
+            height: 2px;
+            background: linear-gradient(90deg, {primary}, {secondary}, transparent);
+            margin: 12px 0 16px 0;
+            border-radius: 2px;
+        }}
+        .toggle-indicator {{
+            font-size: 16px;
+            transition: transform 0.3s;
+            color: {primary};
+            font-weight: 300;
+        }}
+        .toggle-indicator.collapsed {{
+            transform: rotate(-90deg);
+        }}
+        .section-content {{
+            display: block;
+            transition: all 0.4s ease;
+        }}
+        .section-content.collapsed {{
+            display: none;
+        }}
+        
+        /* Metrics Grid */
+        .metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 12px 0;
+        }}
+        .metric-card {{
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            padding: 12px 16px;
+            border-radius: 10px;
+            border-left: 4px solid {primary};
+            text-align: center;
+            transition: all 0.3s;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+            position: relative;
+            overflow: hidden;
+        }}
+        .metric-card:hover {{
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+            border-left-color: {secondary};
+        }}
+        .metric-value {{
+            font-size: 24px;
+            font-weight: 700;
+            color: #2C3E50;
+            font-family: 'Times New Roman', serif;
+            background: linear-gradient(135deg, {primary}, {secondary});
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }}
+        .metric-label {{
+            font-size: 10px;
+            color: #7F8C8D;
+            margin-top: 3px;
+            font-family: 'Times New Roman', serif;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }}
+        
+        /* Article items */
+        .article-item {{
+            transition: all 0.2s;
+        }}
+        .article-item:hover {{
+            background: #e9ecef !important;
+            transform: translateX(3px);
+        }}
+        
+        /* TOC */
+        .toc-item {{
+            padding: 3px 0;
+            font-size: 13px;
+        }}
+        .toc-item a {{
+            color: #2C3E50;
+            text-decoration: none;
+            transition: color 0.2s;
+        }}
+        .toc-item a:hover {{
+            color: {primary};
+            text-decoration: underline;
+        }}
+        .toc-item.toc-sub {{
+            padding-left: 20px;
+            font-size: 12px;
+            color: #555;
+        }}
+        
+        /* Color scale */
+        .color-scale-value {{
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+            text-align: center;
+            min-width: 28px;
+            transition: all 0.2s;
+            font-size: 12px;
+        }}
+        .color-scale-value:hover {{
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+        
+        /* Footer */
+        .footer {{
+            margin-top: 30px;
+            padding-top: 16px;
+            border-top: 2px solid #e9ecef;
+            text-align: center;
+            color: #7F8C8D;
+            font-size: 11px;
+        }}
+        
+        @media print {{
+            .sidebar {{ display: none; }}
+            .main-content {{ margin-left: 0; }}
+            .section {{ box-shadow: none; border: 1px solid #ddd; }}
+        }}
+        @media (max-width: 768px) {{
+            .sidebar {{ display: none; }}
+            .main-content {{ margin-left: 0; padding: 15px; }}
+            .header {{ padding: 15px 20px; }}
+            .header h1 {{ font-size: 20px; }}
+            .metrics-grid {{ grid-template-columns: repeat(2, 1fr); }}
+        }}
+        
+        @keyframes fadeInUp {{
+            from {{ opacity: 0; transform: translateY(20px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        .section {{
+            animation: fadeInUp 0.5s ease forwards;
+        }}
+        .section:nth-child(2) {{ animation-delay: 0.1s; }}
+        .section:nth-child(3) {{ animation-delay: 0.2s; }}
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h3>{escape_html(journal_abbr)}</h3>
+        {''.join(nav_items)}
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 10px; opacity: 0.7; line-height: 1.5;">
+            <div>Period: {format_year_filter_for_filename(years)}</div>
+            <div>Total: {total_articles} articles</div>
+            <div style="margin-top: 3px; font-size: 9px; opacity: 0.6;">Generated: {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>
+        </div>
+    </div>
     
-    story.append(Paragraph(conclusion_text, conclusion_style))
-    story.append(Spacer(1, 1*cm))
+    <div class="main-content">
+        <!-- Header -->
+        <div class="header">
+            <h1>{escape_html(journal_name)}</h1>
+            <div class="subtitle">
+                Publisher &amp; Journal Report | Period: {format_year_filter_for_filename(years)} | Total: {total_articles} articles
+                {f' | Filter: «{escape_html(search_query)}»' if search_query and has_filter else ''}
+            </div>
+        </div>
+        
+        {''.join(main_content)}
+    </div>
     
-    # Add logo at end with preserved aspect ratio (smaller)
-    add_logo_to_pdf(story, logo_path, max_width=120, max_height=120, add_spacer=True)
+    <script>
+        function toggleSection(sectionId) {{
+            var content = document.getElementById(sectionId);
+            var indicator = document.getElementById(sectionId.replace('_content', '_indicator'));
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (indicator) {{
+                        indicator.textContent = '▼';
+                        indicator.classList.remove('collapsed');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (indicator) {{
+                        indicator.textContent = '▶';
+                        indicator.classList.add('collapsed');
+                    }}
+                }}
+            }}
+        }}
+        
+        // Auto-open first section
+        document.addEventListener('DOMContentLoaded', function() {{
+            var sections = ['publications_content'];
+            sections.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.style.display = 'none';
+                }}
+            }});
+            var indicators = ['publications_indicator'];
+            indicators.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.textContent = '▶';
+                    el.classList.add('collapsed');
+                }}
+            }});
+        }});
+    </script>
+</body>
+</html>'''
     
-    story.append(Paragraph(f"© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d')}", footer_style))
-    story.append(Paragraph("Report generated using CTA Article Recommender Pro*2", footer_style))
-    
-    doc.build(story)
-    return buffer.getvalue()
+    return html_content
 
-def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[int],
-                              articles: List[dict], logo_path: str = None,
-                              report_title: str = "Report by Citations per Year",
-                              sort_option: str = 'citations_per_year') -> bytes:
-    """Generate PDF report with articles sorted by citations per year."""
-    russian_font_name = register_russian_font()
+
+def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List[int],
+                               articles: List[dict], report_title: str = "Report by Citations",
+                               sort_option: str = 'citations_per_year') -> str:
+    """Generate HTML report with articles sorted by citations."""
     
     # Get filter info from session_state
     search_query = st.session_state.get('search_query', '')
     has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
     
-    buffer = io.BytesIO()
-    
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        topMargin=1.5*cm,
-        bottomMargin=1.5*cm,
-        leftMargin=2*cm,
-        rightMargin=2*cm
-    )
-    
-    styles = getSampleStyleSheet()
-    
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Normal'],
-        fontSize=22,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=12,
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    subtitle_style = ParagraphStyle(
-        'CustomSubtitle',
-        parent=styles['Normal'],
-        fontSize=14,
-        textColor=colors.HexColor('#34495E'),
-        spaceAfter=8,
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    article_title_style = ParagraphStyle(
-        'ArticleTitle',
-        parent=styles['Normal'],
-        fontSize=11,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=5,
-        leftIndent=0,
-        fontName=russian_font_name
-    )
-    
-    authors_style = ParagraphStyle(
-        'AuthorsStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=3,
-        leftIndent=0,
-        fontName=russian_font_name
-    )
-    
-    meta_style_default = ParagraphStyle(
-        'MetaDefault',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#27ae60'),
-        spaceAfter=2,
-        leftIndent=0,
-        fontName=russian_font_name
-    )
-    
-    meta_style_preprint = ParagraphStyle(
-        'MetaPreprint',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#9b59b6'),
-        spaceAfter=2,
-        leftIndent=0,
-        fontName=russian_font_name
-    )
-    
-    meta_style_book = ParagraphStyle(
-        'MetaBook',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#e67e22'),
-        spaceAfter=2,
-        leftIndent=0,
-        fontName=russian_font_name
-    )
-    
-    meta_style_conference = ParagraphStyle(
-        'MetaConference',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#2980b9'),
-        spaceAfter=2,
-        leftIndent=0,
-        fontName=russian_font_name
-    )
-    
-    meta_style_other = ParagraphStyle(
-        'MetaOther',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#7f8c8d'),
-        spaceAfter=2,
-        leftIndent=0,
-        fontName=russian_font_name
-    )
-    
-    citation_style = ParagraphStyle(
-        'CitationStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#27AE60'),
-        spaceAfter=2,
-        leftIndent=0,
-        fontName=russian_font_name
-    )
-    
-    intro_style = ParagraphStyle(
-        'IntroStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=20,
-        alignment=TA_JUSTIFY,
-        fontName=russian_font_name
-    )
-    
-    footer_style = ParagraphStyle(
-        'FooterStyle',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#95A5A6'),
-        spaceBefore=15,
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    separator_style = ParagraphStyle(
-        'Separator',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#BDC3C7'),
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    conclusion_style = ParagraphStyle(
-        'ConclusionStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=20,
-        alignment=TA_JUSTIFY,
-        fontName=russian_font_name
-    )
-    
-    toc_article_style = ParagraphStyle(
-        'TOCArticleStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=3,
-        fontName=russian_font_name
-    )
-    
-    toc_more_style = ParagraphStyle(
-        'TOCMoreStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#7F8C8D'),
-        spaceAfter=3,
-        fontName=russian_font_name
-    )
-    
-    story = []
-    
     total_articles = len(articles)
     
-    story.append(Spacer(1, 2*cm))
+    if total_articles == 0:
+        return "<html><body><h1>No articles to display</h1></body></html>"
     
-    # Add logo at beginning with preserved aspect ratio
-    add_logo_to_pdf(story, logo_path, max_width=200, max_height=200, add_spacer=True)
+    # Primary colors
+    primary = '#667eea'
+    secondary = '#764ba2'
     
-    story.append(Paragraph("Analytical Report", title_style))
-    story.append(Paragraph(f"«{clean_text(journal_name)}»", subtitle_style))
-    story.append(Spacer(1, 1*cm))
-    
-    years_str = format_year_filter_for_filename(years)
-    story.append(Paragraph(f"Publication period: {years_str}", subtitle_style))
-    story.append(Spacer(1, 1.5*cm))
-    
+    # Calculate statistics
     avg_citations = sum(a.get('citations_per_year', 0) for a in articles) / total_articles if total_articles > 0 else 0
+    total_citations = sum(a.get('cited_by_count', 0) for a in articles)
+    max_citations = max([a.get('cited_by_count', 0) for a in articles]) if articles else 0
+    max_citations_per_year = max([a.get('citations_per_year', 0) for a in articles]) if articles else 0
     
-    # Format intro text with filter info
     sort_display = sort_option.replace('_', ' ').title()
     if sort_option == 'publication_date':
         sort_display = 'Publication Date (Newest First)'
     
-    if search_query and has_filter:
-        intro_text = f"""
-        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-        sorted by {sort_display}.
-        
-        Average citations per year: {avg_citations:.1f}
-        
-        <b>Applied filter:</b> «{clean_text(search_query)}»
-        """
-    else:
-        intro_text = f"""
-        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-        sorted by {sort_display}.
-        
-        Average citations per year: {avg_citations:.1f}
-        """
+    # Build navigation items
+    nav_items = []
+    nav_items.append(f'<a href="#overview"><span class="nav-icon">📋</span> Overview</a>')
+    nav_items.append(f'<a href="#publications"><span class="nav-icon">📄</span> Publications</a>')
     
-    story.append(Paragraph(intro_text, intro_style))
-    story.append(Spacer(1, 1*cm))
-    
-    stats_data = [
-        ["Metric", "Value"],
-        ["Total Articles", str(total_articles)],
-        ["Avg Citations/Year", f"{avg_citations:.1f}"],
-        ["Report Type", report_title],
-        ["Sorting", sort_display]
-    ]
-    
-    stats_table = Table(stats_data, colWidths=[doc.width/2.5, doc.width/3])
-    stats_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), russian_font_name),
-        ('FONTSIZE', (0, 0), (-1, 0), 11),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D5DBDB')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F2F4F4')]),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    ]))
-    
-    story.append(stats_table)
-    story.append(PageBreak())
-    
-    # ===== TABLE OF CONTENTS WITH INTELLIGENT INDEX SELECTION =====
-    story.append(Paragraph("Table of Contents", title_style))
-    story.append(Spacer(1, 0.5*cm))
-    
-    # Calculate which article indices to show in TOC
+    # Build TOC items with intelligent index selection
     toc_indices = calculate_toc_indices(total_articles)
-    
-    # Display selected articles in TOC
+    toc_items = []
     for idx in toc_indices:
-        article = articles[idx - 1]  # Convert 1-based index to 0-based
-        title = clean_text(article.get('title', 'No title')[:60])
-        
-        # Format the display text based on sort option
+        article = articles[idx - 1]
+        title = escape_html(article.get('title', 'No title')[:60])
         if sort_option == 'citations_per_year':
             citations = article.get('citations_per_year', 0)
             display_text = f"{idx}. {title}... — {citations:.1f} citations/year"
         elif sort_option == 'total_citations':
             citations = article.get('cited_by_count', 0)
             display_text = f"{idx}. {title}... — {citations} total citations"
-        else:  # publication_date
+        else:
             pub_date = article.get('publication_date', '')
             display_text = f"{idx}. {title}... — {pub_date}"
-        
-        # Create anchor for this article
-        anchor_id = f"article_{hashlib.md5(str(idx).encode('utf-8')).hexdigest()[:8]}"
-        story.append(Paragraph(f'<a href="#{anchor_id}">{display_text}</a>', toc_article_style))
+        toc_items.append(f'<div class="toc-item"><a href="#article_{idx}">{display_text}</a></div>')
     
-    # Show message about omitted articles if any
     if len(toc_indices) < total_articles:
         omitted_count = total_articles - len(toc_indices)
-        story.append(Paragraph(f"... and {omitted_count} more articles not shown in TOC", toc_more_style))
+        toc_items.append(f'<div class="toc-item" style="color: #999; font-style: italic;">... and {omitted_count} more articles</div>')
     
-    story.append(PageBreak())
+    # Build main content
+    main_content = []
     
-    # ===== MAIN CONTENT =====
-    sort_display_title = sort_display
-    story.append(Paragraph(f"Articles by {sort_display_title}", title_style))
-    story.append(Spacer(1, 0.5*cm))
+    # Overview section
+    main_content.append(f'''
+    <div id="overview" class="section">
+        <div class="section-header" onclick="toggleSection('overview_content')">
+            <div class="section-title">
+                <span class="icon">📋</span> Overview
+                <span class="section-badge">{total_articles} articles</span>
+            </div>
+            <span class="toggle-indicator" id="overview_indicator">▼</span>
+        </div>
+        <div class="section-divider"></div>
+        <div id="overview_content" class="section-content">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value">{total_articles}</div>
+                    <div class="metric-label">Total Articles</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{total_citations:,}</div>
+                    <div class="metric-label">Total Citations</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{avg_citations:.1f}</div>
+                    <div class="metric-label">Avg Citations/Year</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{max_citations}</div>
+                    <div class="metric-label">Max Citations</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 15px; padding: 12px 16px; background: #f8f9fa; border-radius: 8px; border-left: 3px solid {primary};">
+                <strong>Report Type:</strong> {report_title}<br>
+                <strong>Sorting:</strong> {sort_display}
+                {f'<br><strong>Applied Filter:</strong> «{escape_html(search_query)}»' if search_query and has_filter else ''}
+            </div>
+            
+            <div style="margin-top: 15px;">
+                <h3 style="color: {primary}; font-size: 16px;">📑 Table of Contents</h3>
+                <div style="max-height: 300px; overflow-y: auto; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                    {''.join(toc_items)}
+                </div>
+            </div>
+        </div>
+    </div>
+    ''')
+    
+    # Publications section
+    main_content.append(f'''
+    <div id="publications" class="section">
+        <div class="section-header" onclick="toggleSection('publications_content')">
+            <div class="section-title">
+                <span class="icon">📄</span> Publications
+                <span class="section-badge">{total_articles} articles</span>
+            </div>
+            <span class="toggle-indicator" id="publications_indicator">▼</span>
+        </div>
+        <div class="section-divider"></div>
+        <div id="publications_content" class="section-content">
+            <p style="margin-bottom: 12px; color: #666; font-size: 14px;">Sorted by {sort_display}</p>
+    ''')
     
     for idx, article in enumerate(articles, 1):
-        anchor_id = f"article_{hashlib.md5(str(idx).encode('utf-8')).hexdigest()[:8]}"
-        anchor_para = Paragraph(f'<a name="{anchor_id}"/>', ParagraphStyle('AnchorStyle', parent=styles['Normal'], fontSize=1, textColor=colors.white, fontName=russian_font_name))
-        story.append(anchor_para)
-        
-        title = clean_text(article.get('title', 'No title'))
-        story.append(Paragraph(f"{idx}. {title}", article_title_style))
-        
-        authors = clean_text(article.get('authors', 'Authors not specified'))
-        story.append(Paragraph(f"<b>Authors:</b> {authors}", authors_style))
-        
-        # Single output of affiliations with proper separator
-        affs = clean_text(article.get('affiliations_str', ''))
-        if affs and affs != 'No affiliations specified':
-            story.append(Paragraph(f"<b>Affiliations:</b> {affs}", meta_style_default))
-        
-        # Publication type badge
-        type_label = article.get('type_label', 'Other')
-        type_icon = article.get('type_icon', '📎')
-        type_color = article.get('type_color', '#7f8c8d')
-        
-        # Select appropriate style based on type
-        if type_label == 'Preprint':
-            meta_style = meta_style_preprint
-        elif type_label == 'Book/Chapter':
-            meta_style = meta_style_book
-        elif type_label == 'Conference':
-            meta_style = meta_style_conference
-        elif type_label == 'Article':
-            meta_style = meta_style_default
-        else:
-            meta_style = meta_style_other
-        
-        story.append(Paragraph(
-            f"<font color='{type_color}'><b>{type_icon} {type_label}</b></font>",
-            meta_style
-        ))
-        
-        # Journal name
-        journal_name_article = clean_text(article.get('journal_name', ''))
-        if journal_name_article:
-            story.append(Paragraph(f"<b>Journal:</b> {journal_name_article}", meta_style_default))
-        
+        title = escape_html(article.get('title', 'No title'))
+        authors = escape_html(article.get('authors', 'Authors not specified'))
+        affiliations = escape_html(article.get('affiliations_str', ''))
         year = article.get('publication_year', '')
         pub_date = article.get('publication_date', '')
         volume = article.get('volume', '')
         issue = article.get('issue', '')
         pages = article.get('pages', '')
+        citations = article.get('cited_by_count', 0)
+        citations_per_year = article.get('citations_per_year', 0)
+        references = article.get('referenced_works_count', 0)
+        oa_status = article.get('oa_status', 'Closed Access')
+        type_label = article.get('type_label', 'Other')
+        type_icon = article.get('type_icon', '📎')
+        type_color = article.get('type_color', '#7f8c8d')
+        doi_url = article.get('doi_url', '')
+        journal_name_article = article.get('journal_name', '')
         
         meta_parts = []
         if year:
@@ -2570,399 +2437,549 @@ def generate_pdf_by_citations(journal_name: str, journal_abbr: str, years: List[
             meta_parts.append(f"Iss. {issue}")
         if pages:
             meta_parts.append(f"pp. {pages}")
+        meta_str = ', '.join(meta_parts) if meta_parts else ''
         
-        if meta_parts:
-            story.append(Paragraph(f"{', '.join(meta_parts)}", meta_style_default))
+        # Determine rank badge
+        rank_badge = ''
+        if idx == 1:
+            rank_badge = '🥇'
+        elif idx == 2:
+            rank_badge = '🥈'
+        elif idx == 3:
+            rank_badge = '🥉'
         
-        citations = article.get('cited_by_count', 0)
-        citations_per_year = article.get('citations_per_year', 0)
-        references = article.get('referenced_works_count', 0)
-        oa_status = article.get('oa_status', 'Closed Access')
+        # Citation color scale
+        if sort_option == 'citations_per_year':
+            citation_display = get_color_scale_html(citations_per_year, max_citations_per_year, decimals=1)
+        else:
+            citation_display = get_color_scale_html(citations, max_citations, 0)
         
-        citation_text = f"<b>Citations:</b> {citations} | <b>per year:</b> {citations_per_year:.1f} | <b>References:</b> {references} | <b>OA:</b> {oa_status}"
-        story.append(Paragraph(citation_text, citation_style))
+        main_content.append(f'''
+        <div id="article_{idx}" class="article-item" style="margin: 10px 0; padding: 12px 16px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span style="font-weight: 700; color: {primary};">{idx}.</span>
+                {rank_badge}
+                <span style="font-weight: 500;">{title}</span>
+                <span style="color: {type_color}; font-size: 0.85rem; background: {type_color}20; padding: 0 8px; border-radius: 10px;">{type_icon} {type_label}</span>
+                <span style="margin-left: auto; font-weight: 600; color: {primary};">{citation_display}</span>
+            </div>
+            <div style="font-size: 0.9rem; color: #555; margin-top: 4px;">
+                <strong>Authors:</strong> {authors}
+            </div>
+            {f'<div style="font-size: 0.85rem; color: #666;"><strong>Affiliations:</strong> {affiliations}</div>' if affiliations and affiliations != 'No affiliations specified' else ''}
+            {f'<div style="font-size: 0.85rem; color: #666;"><strong>Journal:</strong> {escape_html(journal_name_article)}</div>' if journal_name_article else ''}
+            {f'<div style="font-size: 0.85rem; color: #666;">{meta_str}</div>' if meta_str else ''}
+            <div style="font-size: 0.85rem; color: #666; display: flex; flex-wrap: wrap; gap: 12px;">
+                <span><strong>Citations:</strong> {citations}</span>
+                <span><strong>Per year:</strong> {citations_per_year:.1f}</span>
+                <span><strong>References:</strong> {references}</span>
+                <span><strong>OA:</strong> {oa_status}</span>
+            </div>
+            {f'<div style="font-size: 0.8rem; margin-top: 2px;"><a href="{doi_url}" target="_blank" style="color: #2980B9; text-decoration: none;">{doi_url}</a></div>' if doi_url else ''}
+        </div>
+        ''')
+    
+    main_content.append('</div></div>')
+    
+    # Footer
+    main_content.append(f'''
+    <div class="footer">
+        <p>© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+        <p>Report generated using CTA Article Recommender Pro*2</p>
+    </div>
+    ''')
+    
+    # Complete HTML
+    html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{escape_html(journal_name)} - Citations Report</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Times New Roman', 'DejaVu Serif', serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            color: #333;
+        }}
+        .report-wrapper {{
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            border-radius: 10px;
+            overflow: hidden;
+        }}
         
-        doi_url = article.get('doi_url', '')
-        if doi_url:
-            doi_url_clean = clean_doi_url(doi_url)
-            story.append(Paragraph(f"<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style_default))
+        .sidebar {{
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 260px;
+            height: 100vh;
+            background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+            color: white;
+            padding: 20px 16px;
+            overflow-y: auto;
+            z-index: 1000;
+            box-shadow: 2px 0 20px rgba(0,0,0,0.15);
+        }}
+        .sidebar::-webkit-scrollbar {{ width: 4px; }}
+        .sidebar::-webkit-scrollbar-thumb {{ background: rgba(255,255,255,0.3); border-radius: 4px; }}
         
-        story.append(Spacer(1, 0.15*cm))
+        .sidebar h3 {{
+            margin-bottom: 16px;
+            font-size: 16px;
+            font-weight: 700;
+            color: white;
+            border-bottom: 2px solid rgba(255,255,255,0.3);
+            padding-bottom: 12px;
+            letter-spacing: 0.5px;
+            word-wrap: break-word;
+        }}
+        .sidebar a {{
+            color: white;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 12px;
+            margin: 2px 0;
+            border-radius: 6px;
+            transition: all 0.3s;
+            font-size: 12px;
+        }}
+        .sidebar a:hover {{
+            background: rgba(255,255,255,0.2);
+            transform: translateX(4px);
+        }}
+        .sidebar a .nav-icon {{
+            font-size: 14px;
+            width: 22px;
+            text-align: center;
+        }}
         
-        if idx < len(articles):
-            story.append(Paragraph("─" * 60, separator_style))
-            story.append(Spacer(1, 0.1*cm))
+        .main-content {{
+            margin-left: 260px;
+            padding: 25px 35px;
+        }}
+        
+        .header {{
+            background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+            color: white;
+            padding: 25px 35px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }}
+        .header h1 {{
+            color: white;
+            margin: 0;
+            font-size: 26px;
+            font-weight: 700;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            word-wrap: break-word;
+        }}
+        .header .subtitle {{
+            opacity: 0.9;
+            margin-top: 4px;
+            font-size: 13px;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }}
+        
+        .section {{
+            background: white;
+            border-radius: 12px;
+            padding: 20px 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            border: 1px solid #f0f0f0;
+            transition: all 0.3s;
+        }}
+        .section:hover {{
+            box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+        }}
+        
+        .section-header {{
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+            padding: 4px 0;
+        }}
+        .section-header:hover .section-title {{
+            color: {primary};
+        }}
+        .section-title {{
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #2C3E50;
+            transition: color 0.3s;
+        }}
+        .section-title .icon {{
+            font-size: 22px;
+        }}
+        .section-title .section-badge {{
+            background: linear-gradient(135deg, {primary}, {secondary});
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 6px;
+        }}
+        .section-divider {{
+            height: 2px;
+            background: linear-gradient(90deg, {primary}, {secondary}, transparent);
+            margin: 12px 0 16px 0;
+            border-radius: 2px;
+        }}
+        .toggle-indicator {{
+            font-size: 16px;
+            transition: transform 0.3s;
+            color: {primary};
+            font-weight: 300;
+        }}
+        .toggle-indicator.collapsed {{
+            transform: rotate(-90deg);
+        }}
+        .section-content {{
+            display: block;
+            transition: all 0.4s ease;
+        }}
+        .section-content.collapsed {{
+            display: none;
+        }}
+        
+        .metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 12px 0;
+        }}
+        .metric-card {{
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            padding: 12px 16px;
+            border-radius: 10px;
+            border-left: 4px solid {primary};
+            text-align: center;
+            transition: all 0.3s;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+            position: relative;
+            overflow: hidden;
+        }}
+        .metric-card:hover {{
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+            border-left-color: {secondary};
+        }}
+        .metric-value {{
+            font-size: 24px;
+            font-weight: 700;
+            color: #2C3E50;
+            font-family: 'Times New Roman', serif;
+            background: linear-gradient(135deg, {primary}, {secondary});
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }}
+        .metric-label {{
+            font-size: 10px;
+            color: #7F8C8D;
+            margin-top: 3px;
+            font-family: 'Times New Roman', serif;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }}
+        
+        .article-item {{
+            transition: all 0.2s;
+        }}
+        .article-item:hover {{
+            background: #e9ecef !important;
+            transform: translateX(3px);
+        }}
+        
+        .toc-item {{
+            padding: 3px 0;
+            font-size: 13px;
+        }}
+        .toc-item a {{
+            color: #2C3E50;
+            text-decoration: none;
+            transition: color 0.2s;
+        }}
+        .toc-item a:hover {{
+            color: {primary};
+            text-decoration: underline;
+        }}
+        
+        .color-scale-value {{
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+            text-align: center;
+            min-width: 28px;
+            transition: all 0.2s;
+            font-size: 12px;
+        }}
+        .color-scale-value:hover {{
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+        
+        .footer {{
+            margin-top: 30px;
+            padding-top: 16px;
+            border-top: 2px solid #e9ecef;
+            text-align: center;
+            color: #7F8C8D;
+            font-size: 11px;
+        }}
+        
+        @media print {{
+            .sidebar {{ display: none; }}
+            .main-content {{ margin-left: 0; }}
+            .section {{ box-shadow: none; border: 1px solid #ddd; }}
+        }}
+        @media (max-width: 768px) {{
+            .sidebar {{ display: none; }}
+            .main-content {{ margin-left: 0; padding: 15px; }}
+            .header {{ padding: 15px 20px; }}
+            .header h1 {{ font-size: 20px; }}
+            .metrics-grid {{ grid-template-columns: repeat(2, 1fr); }}
+        }}
+        
+        @keyframes fadeInUp {{
+            from {{ opacity: 0; transform: translateY(20px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        .section {{
+            animation: fadeInUp 0.5s ease forwards;
+        }}
+        .section:nth-child(2) {{ animation-delay: 0.1s; }}
+        .section:nth-child(3) {{ animation-delay: 0.2s; }}
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h3>{escape_html(journal_abbr)}</h3>
+        {''.join(nav_items)}
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 10px; opacity: 0.7; line-height: 1.5;">
+            <div>Period: {format_year_filter_for_filename(years)}</div>
+            <div>Total: {total_articles} articles</div>
+            <div style="margin-top: 3px; font-size: 9px; opacity: 0.6;">Generated: {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>
+        </div>
+    </div>
     
-    story.append(Spacer(1, 0.3*cm))
-    story.append(PageBreak())
+    <div class="main-content">
+        <div class="header">
+            <h1>{escape_html(journal_name)}</h1>
+            <div class="subtitle">
+                Citations Report | Period: {format_year_filter_for_filename(years)} | Total: {total_articles} articles
+                {f' | Filter: «{escape_html(search_query)}»' if search_query and has_filter else ''}
+            </div>
+        </div>
+        
+        {''.join(main_content)}
+    </div>
     
-    story.append(Paragraph("Conclusion", title_style))
-    story.append(Spacer(1, 0.5*cm))
+    <script>
+        function toggleSection(sectionId) {{
+            var content = document.getElementById(sectionId);
+            var indicator = document.getElementById(sectionId.replace('_content', '_indicator'));
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (indicator) {{
+                        indicator.textContent = '▼';
+                        indicator.classList.remove('collapsed');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (indicator) {{
+                        indicator.textContent = '▶';
+                        indicator.classList.add('collapsed');
+                    }}
+                }}
+            }}
+        }}
+        
+        document.addEventListener('DOMContentLoaded', function() {{
+            var sections = ['publications_content'];
+            sections.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.style.display = 'none';
+                }}
+            }});
+            var indicators = ['publications_indicator'];
+            indicators.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.textContent = '▶';
+                    el.classList.add('collapsed');
+                }}
+            }});
+        }});
+    </script>
+</body>
+</html>'''
     
-    conclusion_text = f"""
-    This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-    sorted by {sort_display} in descending order.
-    
-    The articles with the highest {sort_display.lower()} are listed first,
-    representing the most impactful recent publications.
-    """
-    
-    story.append(Paragraph(conclusion_text, conclusion_style))
-    story.append(Spacer(1, 1*cm))
-    
-    # Add logo at end with preserved aspect ratio (smaller)
-    add_logo_to_pdf(story, logo_path, max_width=120, max_height=120, add_spacer=True)
-    
-    story.append(Paragraph(f"© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d')}", footer_style))
-    story.append(Paragraph("Report generated using CTA Article Recommender Pro*2", footer_style))
-    
-    doc.build(story)
-    return buffer.getvalue()
+    return html_content
 
-def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, years: List[int],
-                                       hierarchy: Dict, logo_path: str = None,
-                                       report_title: str = "Report by Country & Affiliation",
-                                       sort_option: str = 'alphabetical') -> bytes:
-    """Generate PDF report grouping articles by Country -> Affiliation."""
-    russian_font_name = register_russian_font()
+
+def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, years: List[int],
+                                        hierarchy: Dict, report_title: str = "Report by Country & Affiliation",
+                                        sort_option: str = 'alphabetical') -> str:
+    """Generate HTML report grouping articles by Country -> Affiliation."""
     
     # Get filter info from session_state
     search_query = st.session_state.get('search_query', '')
     has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
-    
-    buffer = io.BytesIO()
-    
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        topMargin=1.5*cm,
-        bottomMargin=1.5*cm,
-        leftMargin=2*cm,
-        rightMargin=2*cm
-    )
-    
-    styles = getSampleStyleSheet()
-    
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Normal'],
-        fontSize=22,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=12,
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    subtitle_style = ParagraphStyle(
-        'CustomSubtitle',
-        parent=styles['Normal'],
-        fontSize=14,
-        textColor=colors.HexColor('#34495E'),
-        spaceAfter=8,
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    country_style = ParagraphStyle(
-        'CountryStyle',
-        parent=styles['Normal'],
-        fontSize=18,
-        textColor=colors.HexColor('#667eea'),
-        spaceAfter=10,
-        spaceBefore=20,
-        fontName=russian_font_name
-    )
-    
-    affiliation_style = ParagraphStyle(
-        'AffiliationStyle',
-        parent=styles['Normal'],
-        fontSize=15,
-        textColor=colors.HexColor('#764ba2'),
-        spaceAfter=8,
-        spaceBefore=12,
-        leftIndent=20,
-        fontName=russian_font_name
-    )
-    
-    article_title_style = ParagraphStyle(
-        'ArticleTitle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=5,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    authors_style = ParagraphStyle(
-        'AuthorsStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=3,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_default = ParagraphStyle(
-        'MetaDefault',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#27ae60'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_preprint = ParagraphStyle(
-        'MetaPreprint',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#9b59b6'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_book = ParagraphStyle(
-        'MetaBook',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#e67e22'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_conference = ParagraphStyle(
-        'MetaConference',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#2980b9'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    meta_style_other = ParagraphStyle(
-        'MetaOther',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#7f8c8d'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    citation_style = ParagraphStyle(
-        'CitationStyle',
-        parent=styles['Normal'],
-        fontSize=9,
-        textColor=colors.HexColor('#27AE60'),
-        spaceAfter=2,
-        leftIndent=40,
-        fontName=russian_font_name
-    )
-    
-    toc_country_style = ParagraphStyle(
-        'TOCCountryStyle',
-        parent=styles['Normal'],
-        fontSize=12,
-        textColor=colors.HexColor('#667eea'),
-        spaceAfter=6,
-        fontName=russian_font_name
-    )
-    
-    toc_affiliation_style = ParagraphStyle(
-        'TOCAffiliationStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#764ba2'),
-        spaceAfter=4,
-        leftIndent=15,
-        fontName=russian_font_name
-    )
-    
-    intro_style = ParagraphStyle(
-        'IntroStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=20,
-        alignment=TA_JUSTIFY,
-        fontName=russian_font_name
-    )
-    
-    footer_style = ParagraphStyle(
-        'FooterStyle',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#95A5A6'),
-        spaceBefore=15,
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    separator_style = ParagraphStyle(
-        'Separator',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.HexColor('#BDC3C7'),
-        alignment=TA_CENTER,
-        fontName=russian_font_name
-    )
-    
-    conclusion_style = ParagraphStyle(
-        'ConclusionStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#2C3E50'),
-        spaceAfter=20,
-        alignment=TA_JUSTIFY,
-        fontName=russian_font_name
-    )
-    
-    story = []
     
     total_articles = sum(len(articles) for country in hierarchy.values() 
                         for affiliation in country.values() 
                         for articles in [affiliation])
     total_countries = len(hierarchy)
     
-    story.append(Spacer(1, 2*cm))
+    # Primary colors
+    primary = '#667eea'
+    secondary = '#764ba2'
     
-    # Add logo at beginning with preserved aspect ratio
-    add_logo_to_pdf(story, logo_path, max_width=200, max_height=200, add_spacer=True)
+    # Build navigation items
+    nav_items = []
+    nav_items.append(f'<a href="#overview"><span class="nav-icon">📋</span> Overview</a>')
+    nav_items.append(f'<a href="#publications"><span class="nav-icon">🌍</span> Publications</a>')
     
-    story.append(Paragraph("Analytical Report", title_style))
-    story.append(Paragraph(f"«{clean_text(journal_name)}»", subtitle_style))
-    story.append(Spacer(1, 1*cm))
+    for country in hierarchy.keys():
+        country_id = hashlib.md5(country.encode('utf-8')).hexdigest()[:8]
+        nav_items.append(f'<a href="#country_{country_id}"><span class="nav-icon">🌍</span> {escape_html(country[:20])}</a>')
     
-    years_str = format_year_filter_for_filename(years)
-    story.append(Paragraph(f"Publication period: {years_str}", subtitle_style))
-    story.append(Spacer(1, 1.5*cm))
-    
-    # Format intro text with filter info
-    if search_query and has_filter:
-        intro_text = f"""
-        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-        grouped by Country and Affiliation.
-        
-        <b>Applied filter:</b> «{clean_text(search_query)}»
-        <b>Sorting:</b> {sort_option.replace('_', ' ').title()}
-        """
-    else:
-        intro_text = f"""
-        This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-        grouped by Country and Affiliation.
-        
-        <b>Sorting:</b> {sort_option.replace('_', ' ').title()}
-        """
-    
-    story.append(Paragraph(intro_text, intro_style))
-    story.append(Spacer(1, 1*cm))
-    
-    stats_data = [
-        ["Metric", "Value"],
-        ["Total Articles", str(total_articles)],
-        ["Countries", str(total_countries)],
-        ["Report Type", report_title],
-        ["Sorting", sort_option.replace('_', ' ').title()]
-    ]
-    
-    stats_table = Table(stats_data, colWidths=[doc.width/2.5, doc.width/3])
-    stats_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), russian_font_name),
-        ('FONTSIZE', (0, 0), (-1, 0), 11),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D5DBDB')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F2F4F4')]),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    ]))
-    
-    story.append(stats_table)
-    story.append(PageBreak())
-    
-    story.append(Paragraph("Table of Contents", title_style))
-    story.append(Spacer(1, 0.5*cm))
-    
+    # Build TOC items
+    toc_items = []
     for country, affiliations in hierarchy.items():
         country_articles = sum(len(articles) for articles in affiliations.values())
-        anchor_id = f"country_{hashlib.md5(country.encode('utf-8')).hexdigest()[:8]}"
-        story.append(Paragraph(f'<a href="#{anchor_id}"><b>{clean_text(country)}</b> — {country_articles} articles</a>', toc_country_style))
+        country_id = hashlib.md5(country.encode('utf-8')).hexdigest()[:8]
+        toc_items.append(f'<div class="toc-item"><a href="#country_{country_id}">{escape_html(country)} ({country_articles} articles)</a></div>')
         
         for affiliation, articles in affiliations.items():
             aff_articles = len(articles)
-            aff_anchor_id = f"affiliation_{hashlib.md5(f"{country}_{affiliation}".encode('utf-8')).hexdigest()[:8]}"
-            story.append(Paragraph(f'&nbsp;&nbsp;&nbsp;&nbsp;<a href="#{aff_anchor_id}">{clean_text(affiliation)}</a> — {aff_articles} articles', toc_affiliation_style))
-        
-        story.append(Spacer(1, 0.3*cm))
+            aff_id = hashlib.md5(f"{country}_{affiliation}".encode('utf-8')).hexdigest()[:8]
+            toc_items.append(f'<div class="toc-item toc-sub"><a href="#affiliation_{aff_id}">└ {escape_html(affiliation[:40])}{"..." if len(affiliation) > 40 else ""} ({aff_articles} articles)</a></div>')
     
-    story.append(PageBreak())
+    # Build main content
+    main_content = []
     
+    # Overview section
+    main_content.append(f'''
+    <div id="overview" class="section">
+        <div class="section-header" onclick="toggleSection('overview_content')">
+            <div class="section-title">
+                <span class="icon">📋</span> Overview
+                <span class="section-badge">{total_articles} articles</span>
+            </div>
+            <span class="toggle-indicator" id="overview_indicator">▼</span>
+        </div>
+        <div class="section-divider"></div>
+        <div id="overview_content" class="section-content">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value">{total_articles}</div>
+                    <div class="metric-label">Total Articles</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{total_countries}</div>
+                    <div class="metric-label">Countries</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{len(years)}</div>
+                    <div class="metric-label">Years</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{format_year_filter_for_filename(years)}</div>
+                    <div class="metric-label">Period</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 15px; padding: 12px 16px; background: #f8f9fa; border-radius: 8px; border-left: 3px solid {primary};">
+                <strong>Report Type:</strong> {report_title}<br>
+                <strong>Sorting:</strong> {sort_option.replace('_', ' ').title()}
+                {f'<br><strong>Applied Filter:</strong> «{escape_html(search_query)}»' if search_query and has_filter else ''}
+            </div>
+            
+            <div style="margin-top: 15px;">
+                <h3 style="color: {primary}; font-size: 16px;">📑 Table of Contents</h3>
+                <div style="max-height: 300px; overflow-y: auto; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                    {''.join(toc_items)}
+                </div>
+            </div>
+        </div>
+    </div>
+    ''')
+    
+    # Publications section
+    main_content.append(f'''
+    <div id="publications" class="section">
+        <div class="section-header" onclick="toggleSection('publications_content')">
+            <div class="section-title">
+                <span class="icon">🌍</span> Publications by Country & Affiliation
+                <span class="section-badge">{total_articles} articles</span>
+            </div>
+            <span class="toggle-indicator" id="publications_indicator">▼</span>
+        </div>
+        <div class="section-divider"></div>
+        <div id="publications_content" class="section-content">
+    ''')
+    
+    # Country -> Affiliation hierarchy
     for country, affiliations in hierarchy.items():
         country_articles = sum(len(articles) for articles in affiliations.values())
-        anchor_id = f"country_{hashlib.md5(country.encode('utf-8')).hexdigest()[:8]}"
-        anchor_para = Paragraph(f'<a name="{anchor_id}"/>', ParagraphStyle('AnchorStyle', parent=styles['Normal'], fontSize=1, textColor=colors.white, fontName=russian_font_name))
-        story.append(anchor_para)
+        country_id = hashlib.md5(country.encode('utf-8')).hexdigest()[:8]
         
-        story.append(Paragraph(f"{clean_text(country)} — {country_articles} articles", country_style))
-        story.append(Spacer(1, 0.3*cm))
+        main_content.append(f'''
+        <div id="country_{country_id}" style="margin-bottom: 20px;">
+            <h3 style="color: {primary}; font-size: 18px; margin-bottom: 8px;">🌍 {escape_html(country)} <span class="section-badge">{country_articles} articles</span></h3>
+        ''')
         
         for affiliation, articles in affiliations.items():
-            aff_anchor_id = f"affiliation_{hashlib.md5(f"{country}_{affiliation}".encode('utf-8')).hexdigest()[:8]}"
-            aff_anchor_para = Paragraph(f'<a name="{aff_anchor_id}"/>', ParagraphStyle('AnchorStyle', parent=styles['Normal'], fontSize=1, textColor=colors.white, fontName=russian_font_name))
-            story.append(aff_anchor_para)
+            aff_id = hashlib.md5(f"{country}_{affiliation}".encode('utf-8')).hexdigest()[:8]
             
-            story.append(Paragraph(f"&nbsp;&nbsp;{clean_text(affiliation)} — {len(articles)} articles", affiliation_style))
-            story.append(Spacer(1, 0.2*cm))
+            main_content.append(f'''
+            <div id="affiliation_{aff_id}" style="margin: 12px 0 12px 20px;">
+                <h4 style="color: {secondary}; font-size: 15px; margin-bottom: 6px;">🏛️ {escape_html(affiliation)} <span class="section-badge" style="background: {secondary};">{len(articles)} articles</span></h4>
+            ''')
             
             for idx, article in enumerate(articles, 1):
-                title = clean_text(article.get('title', 'No title'))
-                story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{idx}. {title}", article_title_style))
-                
-                authors = clean_text(article.get('authors', 'Authors not specified'))
-                story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Authors:</b> {authors}", authors_style))
-                
-                # Single output of affiliations with proper separator
-                affs = clean_text(article.get('affiliations_str', ''))
-                if affs and affs != 'No affiliations specified':
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Affiliations:</b> {affs}", meta_style_default))
-                
-                # Publication type badge
-                type_label = article.get('type_label', 'Other')
-                type_icon = article.get('type_icon', '📎')
-                type_color = article.get('type_color', '#7f8c8d')
-                
-                # Select appropriate style based on type
-                if type_label == 'Preprint':
-                    meta_style = meta_style_preprint
-                elif type_label == 'Book/Chapter':
-                    meta_style = meta_style_book
-                elif type_label == 'Conference':
-                    meta_style = meta_style_conference
-                elif type_label == 'Article':
-                    meta_style = meta_style_default
-                else:
-                    meta_style = meta_style_other
-                
-                story.append(Paragraph(
-                    f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='{type_color}'><b>{type_icon} {type_label}</b></font>",
-                    meta_style
-                ))
-                
-                # Journal name
-                journal_name_article = clean_text(article.get('journal_name', ''))
-                if journal_name_article:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>Journal:</b> {journal_name_article}", meta_style_default))
-                
+                title = escape_html(article.get('title', 'No title'))
+                authors = escape_html(article.get('authors', 'Authors not specified'))
+                affiliations_str = escape_html(article.get('affiliations_str', ''))
                 year = article.get('publication_year', '')
                 pub_date = article.get('publication_date', '')
                 volume = article.get('volume', '')
                 issue = article.get('issue', '')
                 pages = article.get('pages', '')
+                citations = article.get('cited_by_count', 0)
+                citations_per_year = article.get('citations_per_year', 0)
+                references = article.get('referenced_works_count', 0)
+                oa_status = article.get('oa_status', 'Closed Access')
+                type_label = article.get('type_label', 'Other')
+                type_icon = article.get('type_icon', '📎')
+                type_color = article.get('type_color', '#7f8c8d')
+                doi_url = article.get('doi_url', '')
+                journal_name_article = article.get('journal_name', '')
                 
                 meta_parts = []
                 if year:
@@ -2975,855 +2992,401 @@ def generate_pdf_by_country_affiliation(journal_name: str, journal_abbr: str, ye
                     meta_parts.append(f"Iss. {issue}")
                 if pages:
                     meta_parts.append(f"pp. {pages}")
+                meta_str = ', '.join(meta_parts) if meta_parts else ''
                 
-                if meta_parts:
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{', '.join(meta_parts)}", meta_style_default))
-                
-                citations = article.get('cited_by_count', 0)
-                citations_per_year = article.get('citations_per_year', 0)
-                references = article.get('referenced_works_count', 0)
-                oa_status = article.get('oa_status', 'Closed Access')
-                
-                citation_text = f"<b>Citations:</b> {citations} | <b>per year:</b> {citations_per_year:.1f} | <b>References:</b> {references} | <b>OA:</b> {oa_status}"
-                story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{citation_text}", citation_style))
-                
-                doi_url = article.get('doi_url', '')
-                if doi_url:
-                    doi_url_clean = clean_doi_url(doi_url)
-                    story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;<b>DOI:</b> <a href='{doi_url_clean}'>{doi_url_clean}</a>", meta_style_default))
-                
-                story.append(Spacer(1, 0.15*cm))
-                
-                if idx < len(articles):
-                    story.append(Paragraph("&nbsp;&nbsp;&nbsp;&nbsp;" + "─" * 40, separator_style))
-                    story.append(Spacer(1, 0.1*cm))
-            
-            story.append(Spacer(1, 0.3*cm))
-        
-        story.append(Spacer(1, 0.3*cm))
-        story.append(PageBreak())
-    
-    story.append(Paragraph("Conclusion", title_style))
-    story.append(Spacer(1, 0.5*cm))
-    
-    conclusion_text = f"""
-    This report contains {total_articles} articles from «{clean_text(journal_name)}»,
-    grouped by {total_countries} countries and their respective affiliations.
-    
-    The articles are organized alphabetically by country and affiliation name.
-    Within each affiliation, articles are sorted by citations per year (descending).
-    """
-    
-    story.append(Paragraph(conclusion_text, conclusion_style))
-    story.append(Spacer(1, 1*cm))
-    
-    # Add logo at end with preserved aspect ratio (smaller)
-    add_logo_to_pdf(story, logo_path, max_width=120, max_height=120, add_spacer=True)
-    
-    story.append(Paragraph(f"© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d')}", footer_style))
-    story.append(Paragraph("Report generated using CTA Article Recommender Pro*2", footer_style))
-    
-    doc.build(story)
-    return buffer.getvalue()
-
-def generate_journal_abbreviation(journal_name: str) -> str:
-    if not journal_name:
-        return "JOURNAL"
-    
-    stop_words = {'of', 'the', 'and', 'for', 'in', 'on', 'at', 'to', 'by', 'with', 'from'}
-    words = re.findall(r'[A-Za-z]+', journal_name)
-    
-    abbreviation_parts = []
-    for word in words:
-        word_lower = word.lower()
-        if word_lower not in stop_words and len(word) > 2:
-            abbreviation_parts.append(word[0].upper())
-        elif len(abbreviation_parts) == 0 and len(words) <= 3:
-            abbreviation_parts.append(word[0].upper())
-    
-    if len(abbreviation_parts) < 3 and len(words) > 0:
-        for word in words:
-            if word.lower() not in stop_words:
-                abbreviation_parts = [word[:4].upper()]
-                break
-    
-    abbreviation = ''.join(abbreviation_parts)
-    
-    if not abbreviation and words:
-        abbreviation = words[0][:4].upper()
-    
-    return abbreviation if abbreviation else "JOURNAL"
-
-# ============================================================================
-# UI STEPS
-# ============================================================================
-
-def step_data_input():
-    """Step 1: Input DOIs"""
-    st.markdown("""
-    <div class="step-card">
-        <h3 style="margin: 0; font-size: 1.3rem;">📥 Step 1: Input Research DOIs</h3>
-        <p style="margin: 5px 0; font-size: 0.9rem;">Enter DOI identifiers to analyze topics and keywords.</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    doi_input = st.text_area(
-        "**DOI Input** (one per line or comma-separated):",
-        height=150,
-        placeholder="Examples:\n10.1038/nmat1849\nhttps://doi.org/10.1038/nmat1849",
-        help="Enter up to 300 DOI identifiers"
-    )
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
-            if doi_input:
-                dois = parse_doi_input(doi_input)
-                if dois:
-                    st.session_state.dois = dois
-                    st.session_state.current_step = 2
-                    if 'pdf_cache' in st.session_state:
-                        del st.session_state.pdf_cache
-                    if 'all_reports_generated' in st.session_state:
-                        del st.session_state.all_reports_generated
-                    if 'filtered_articles' in st.session_state:
-                        del st.session_state.filtered_articles
-                    if 'search_query' in st.session_state:
-                        del st.session_state.search_query
-                    st.rerun()
-                else:
-                    st.error("❌ No valid DOI identifiers found.")
-            else:
-                st.error("❌ Please enter at least one DOI")
-
-def step_analysis():
-    """Step 2: Analysis"""
-    st.markdown("""
-    <div class="step-card">
-        <h3 style="margin: 0; font-size: 1.3rem;">🔍 Step 2: Analysis in Progress</h3>
-        <p style="margin: 5px 0; font-size: 0.9rem;">Fetching data from OpenAlex...</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    if 'dois' not in st.session_state:
-        st.error("❌ No data to analyze. Please go back to Step 1.")
-        return
-    
-    # Back button
-    col_back, col_main = st.columns([1, 5])
-    with col_back:
-        if st.button("← Back", use_container_width=True):
-            st.session_state.current_step = 1
-            st.rerun()
-    
-    dois = st.session_state.dois
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">{len(dois)}</div>
-            <div class="metric-label">DOIs</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">{len(dois)//10}s</div>
-            <div class="metric-label">Est. Time</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">8/sec</div>
-            <div class="metric-label">API Rate</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with st.spinner("Fetching data..."):
-        results, successful, failed = fetch_works_by_dois_sync(dois)
-    
-    works_data = []
-    topic_counter = Counter()
-    titles = []
-    
-    for result in results:
-        if result.get('success') and result.get('data'):
-            work = result['data']
-            enriched = enrich_work_data_full(work)
-            
-            if enriched.get('primary_topic'):
-                topic_counter[enriched['primary_topic']] += 1
-            
-            works_data.append(enriched)
-            titles.append(enriched.get('title', ''))
-    
-    keyword_counter = analyze_keywords_parallel(titles)
-    
-    st.session_state.works_data = works_data
-    st.session_state.topic_counter = topic_counter
-    st.session_state.keyword_counter = keyword_counter
-    st.session_state.successful = successful
-    st.session_state.failed = failed
-    
-    st.markdown(f"""
-    <div class="info-message" style="background: linear-gradient(135deg, #2196F315 0%, #0D47A115 100%); border-radius: 8px; padding: 12px; border-left: 3px solid #2196F3; font-size: 0.9rem; margin: 10px 0;">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <strong>✅ Analysis Complete!</strong><br>
-                Successfully processed {successful} papers
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">{successful}</div>
-            <div class="metric-label">Successful</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">{failed}</div>
-            <div class="metric-label">Failed</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">{len(topic_counter)}</div>
-            <div class="metric-label">Topics</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("🎯 Continue to Topic Selection", type="primary", use_container_width=True):
-            st.session_state.current_step = 3
-            st.rerun()
-
-def step_topic_selection():
-    """Step 3: Topic Selection"""
-    st.markdown("""
-    <div class="step-card">
-        <h3 style="margin: 0; font-size: 1.3rem;">🎯 Step 3: Select Research Topic</h3>
-        <p style="margin: 5px 0; font-size: 0.9rem;">Choose a topic for deep analysis.</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    if not st.session_state.works_data:
-        st.error("❌ No data available. Please start from Step 1.")
-        return
-    
-    # Back button
-    col_back, col_main = st.columns([1, 5])
-    with col_back:
-        if st.button("← Back", use_container_width=True):
-            st.session_state.current_step = 2
-            # Clear any existing topic selection when going back
-            if 'selected_topic' in st.session_state:
-                del st.session_state.selected_topic
-            if 'selected_topic_id' in st.session_state:
-                del st.session_state.selected_topic_id
-            if 'selected_years' in st.session_state:
-                del st.session_state.selected_years
-            if 'all_works' in st.session_state:
-                del st.session_state.all_works
-            if 'enriched_count' in st.session_state:
-                del st.session_state.enriched_count
-            if 'pdf_cache' in st.session_state:
-                del st.session_state.pdf_cache
-            if 'all_reports_generated' in st.session_state:
-                del st.session_state.all_reports_generated
-            if 'filtered_articles' in st.session_state:
-                del st.session_state.filtered_articles
-            if 'search_query' in st.session_state:
-                del st.session_state.search_query
-            if 'search_results_count' in st.session_state:
-                del st.session_state.search_results_count
-            if 'years_input' in st.session_state:
-                del st.session_state.years_input
-            st.rerun()
-    
-    topics = st.session_state.topic_counter.most_common()
-    
-    cols = st.columns(2)
-    for idx, (topic, count) in enumerate(topics[:10]):
-        with cols[idx % 2]:
-            is_selected = st.session_state.get('selected_topic') == topic
-            st.markdown(f"""
-            <div class="topic-card" style="background: white; border-radius: 8px; padding: 12px; margin-bottom: 8px; border: 1px solid {'#667eea' if is_selected else '#e0e0e0'}; cursor: pointer; transition: all 0.2s ease;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div style="font-weight: 600; font-size: 0.9rem;">{topic[:70]}{'...' if len(topic) > 70 else ''}</div>
-                    <span style="background: #667eea; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem;">
-                        {count} papers
-                    </span>
+                main_content.append(f'''
+                <div class="article-item" style="margin: 8px 0 8px 20px; padding: 10px 14px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
+                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                        <span style="font-weight: 600; color: {primary};">{idx}.</span>
+                        <span style="font-weight: 500;">{title}</span>
+                        <span style="color: {type_color}; font-size: 0.85rem; background: {type_color}20; padding: 0 8px; border-radius: 10px;">{type_icon} {type_label}</span>
+                    </div>
+                    <div style="font-size: 0.9rem; color: #555; margin-top: 4px;">
+                        <strong>Authors:</strong> {authors}
+                    </div>
+                    {f'<div style="font-size: 0.85rem; color: #666;"><strong>Affiliations:</strong> {affiliations_str}</div>' if affiliations_str and affiliations_str != 'No affiliations specified' else ''}
+                    {f'<div style="font-size: 0.85rem; color: #666;"><strong>Journal:</strong> {escape_html(journal_name_article)}</div>' if journal_name_article else ''}
+                    {f'<div style="font-size: 0.85rem; color: #666;">{meta_str}</div>' if meta_str else ''}
+                    <div style="font-size: 0.85rem; color: #666; display: flex; flex-wrap: wrap; gap: 12px;">
+                        <span><strong>Citations:</strong> {citations}</span>
+                        <span><strong>Per year:</strong> {citations_per_year:.1f}</span>
+                        <span><strong>References:</strong> {references}</span>
+                        <span><strong>OA:</strong> {oa_status}</span>
+                    </div>
+                    {f'<div style="font-size: 0.8rem; margin-top: 2px;"><a href="{doi_url}" target="_blank" style="color: #2980B9; text-decoration: none;">{doi_url}</a></div>' if doi_url else ''}
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                ''')
             
-            if st.button(f"Select", key=f"select_{idx}", 
-                        use_container_width=True,
-                        type="primary" if is_selected else "secondary"):
-                # Clear previous topic data when selecting new topic
-                if 'selected_topic' in st.session_state and st.session_state.selected_topic != topic:
-                    if 'selected_topic_id' in st.session_state:
-                        del st.session_state.selected_topic_id
-                    if 'selected_years' in st.session_state:
-                        del st.session_state.selected_years
-                    if 'all_works' in st.session_state:
-                        del st.session_state.all_works
-                    if 'enriched_count' in st.session_state:
-                        del st.session_state.enriched_count
-                    if 'pdf_cache' in st.session_state:
-                        del st.session_state.pdf_cache
-                    if 'all_reports_generated' in st.session_state:
-                        del st.session_state.all_reports_generated
-                    if 'filtered_articles' in st.session_state:
-                        del st.session_state.filtered_articles
-                    if 'search_query' in st.session_state:
-                        del st.session_state.search_query
-                    if 'search_results_count' in st.session_state:
-                        del st.session_state.search_results_count
-                    if 'years_input' in st.session_state:
-                        del st.session_state.years_input
-                
-                st.session_state.selected_topic = topic
-                
-                for work in st.session_state.works_data:
-                    if work.get('primary_topic') == topic:
-                        topic_id = work.get('topic_id')
-                        if topic_id:
-                            st.session_state.selected_topic_id = topic_id
-                            break
-                
-                st.rerun()
+            main_content.append('</div>')
+        
+        main_content.append('</div>')
     
-    if 'selected_topic' in st.session_state and 'selected_topic_id' in st.session_state:
-        st.markdown("---")
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.button("⏰ Select Years", type="primary", use_container_width=True):
-                st.session_state.current_step = 4
-                st.rerun()
+    main_content.append('</div></div>')
+    
+    # Footer
+    main_content.append(f'''
+    <div class="footer">
+        <p>© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+        <p>Report generated using CTA Article Recommender Pro*2</p>
+    </div>
+    ''')
+    
+    # Complete HTML
+    html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{escape_html(journal_name)} - Country & Affiliation Report</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Times New Roman', 'DejaVu Serif', serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            color: #333;
+        }}
+        .report-wrapper {{
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            border-radius: 10px;
+            overflow: hidden;
+        }}
+        
+        .sidebar {{
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 260px;
+            height: 100vh;
+            background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+            color: white;
+            padding: 20px 16px;
+            overflow-y: auto;
+            z-index: 1000;
+            box-shadow: 2px 0 20px rgba(0,0,0,0.15);
+        }}
+        .sidebar::-webkit-scrollbar {{ width: 4px; }}
+        .sidebar::-webkit-scrollbar-thumb {{ background: rgba(255,255,255,0.3); border-radius: 4px; }}
+        
+        .sidebar h3 {{
+            margin-bottom: 16px;
+            font-size: 16px;
+            font-weight: 700;
+            color: white;
+            border-bottom: 2px solid rgba(255,255,255,0.3);
+            padding-bottom: 12px;
+            letter-spacing: 0.5px;
+            word-wrap: break-word;
+        }}
+        .sidebar a {{
+            color: white;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 12px;
+            margin: 2px 0;
+            border-radius: 6px;
+            transition: all 0.3s;
+            font-size: 12px;
+        }}
+        .sidebar a:hover {{
+            background: rgba(255,255,255,0.2);
+            transform: translateX(4px);
+        }}
+        .sidebar a .nav-icon {{
+            font-size: 14px;
+            width: 22px;
+            text-align: center;
+        }}
+        
+        .main-content {{
+            margin-left: 260px;
+            padding: 25px 35px;
+        }}
+        
+        .header {{
+            background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+            color: white;
+            padding: 25px 35px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }}
+        .header h1 {{
+            color: white;
+            margin: 0;
+            font-size: 26px;
+            font-weight: 700;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            word-wrap: break-word;
+        }}
+        .header .subtitle {{
+            opacity: 0.9;
+            margin-top: 4px;
+            font-size: 13px;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }}
+        
+        .section {{
+            background: white;
+            border-radius: 12px;
+            padding: 20px 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            border: 1px solid #f0f0f0;
+            transition: all 0.3s;
+        }}
+        .section:hover {{
+            box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+        }}
+        
+        .section-header {{
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+            padding: 4px 0;
+        }}
+        .section-header:hover .section-title {{
+            color: {primary};
+        }}
+        .section-title {{
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #2C3E50;
+            transition: color 0.3s;
+        }}
+        .section-title .icon {{
+            font-size: 22px;
+        }}
+        .section-title .section-badge {{
+            background: linear-gradient(135deg, {primary}, {secondary});
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 6px;
+        }}
+        .section-divider {{
+            height: 2px;
+            background: linear-gradient(90deg, {primary}, {secondary}, transparent);
+            margin: 12px 0 16px 0;
+            border-radius: 2px;
+        }}
+        .toggle-indicator {{
+            font-size: 16px;
+            transition: transform 0.3s;
+            color: {primary};
+            font-weight: 300;
+        }}
+        .toggle-indicator.collapsed {{
+            transform: rotate(-90deg);
+        }}
+        .section-content {{
+            display: block;
+            transition: all 0.4s ease;
+        }}
+        .section-content.collapsed {{
+            display: none;
+        }}
+        
+        .metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 12px 0;
+        }}
+        .metric-card {{
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            padding: 12px 16px;
+            border-radius: 10px;
+            border-left: 4px solid {primary};
+            text-align: center;
+            transition: all 0.3s;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+            position: relative;
+            overflow: hidden;
+        }}
+        .metric-card:hover {{
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+            border-left-color: {secondary};
+        }}
+        .metric-value {{
+            font-size: 24px;
+            font-weight: 700;
+            color: #2C3E50;
+            font-family: 'Times New Roman', serif;
+            background: linear-gradient(135deg, {primary}, {secondary});
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }}
+        .metric-label {{
+            font-size: 10px;
+            color: #7F8C8D;
+            margin-top: 3px;
+            font-family: 'Times New Roman', serif;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }}
+        
+        .article-item {{
+            transition: all 0.2s;
+        }}
+        .article-item:hover {{
+            background: #e9ecef !important;
+            transform: translateX(3px);
+        }}
+        
+        .toc-item {{
+            padding: 3px 0;
+            font-size: 13px;
+        }}
+        .toc-item a {{
+            color: #2C3E50;
+            text-decoration: none;
+            transition: color 0.2s;
+        }}
+        .toc-item a:hover {{
+            color: {primary};
+            text-decoration: underline;
+        }}
+        .toc-item.toc-sub {{
+            padding-left: 20px;
+            font-size: 12px;
+            color: #555;
+        }}
+        
+        .color-scale-value {{
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+            text-align: center;
+            min-width: 28px;
+            transition: all 0.2s;
+            font-size: 12px;
+        }}
+        .color-scale-value:hover {{
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+        
+        .footer {{
+            margin-top: 30px;
+            padding-top: 16px;
+            border-top: 2px solid #e9ecef;
+            text-align: center;
+            color: #7F8C8D;
+            font-size: 11px;
+        }}
+        
+        @media print {{
+            .sidebar {{ display: none; }}
+            .main-content {{ margin-left: 0; }}
+            .section {{ box-shadow: none; border: 1px solid #ddd; }}
+        }}
+        @media (max-width: 768px) {{
+            .sidebar {{ display: none; }}
+            .main-content {{ margin-left: 0; padding: 15px; }}
+            .header {{ padding: 15px 20px; }}
+            .header h1 {{ font-size: 20px; }}
+            .metrics-grid {{ grid-template-columns: repeat(2, 1fr); }}
+        }}
+        
+        @keyframes fadeInUp {{
+            from {{ opacity: 0; transform: translateY(20px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        .section {{
+            animation: fadeInUp 0.5s ease forwards;
+        }}
+        .section:nth-child(2) {{ animation-delay: 0.1s; }}
+        .section:nth-child(3) {{ animation-delay: 0.2s; }}
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h3>{escape_html(journal_abbr)}</h3>
+        {''.join(nav_items)}
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 10px; opacity: 0.7; line-height: 1.5;">
+            <div>Period: {format_year_filter_for_filename(years)}</div>
+            <div>Total: {total_articles} articles</div>
+            <div style="margin-top: 3px; font-size: 9px; opacity: 0.6;">Generated: {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>
+        </div>
+    </div>
+    
+    <div class="main-content">
+        <div class="header">
+            <h1>{escape_html(journal_name)}</h1>
+            <div class="subtitle">
+                Country &amp; Affiliation Report | Period: {format_year_filter_for_filename(years)} | Total: {total_articles} articles
+                {f' | Filter: «{escape_html(search_query)}»' if search_query and has_filter else ''}
+            </div>
+        </div>
+        
+        {''.join(main_content)}
+    </div>
+    
+    <script>
+        function toggleSection(sectionId) {{
+            var content = document.getElementById(sectionId);
+            var indicator = document.getElementById(sectionId.replace('_content', '_indicator'));
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (indicator) {{
+                        indicator.textContent = '▼';
+                        indicator.classList.remove('collapsed');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (indicator) {{
+                        indicator.textContent = '▶';
+                        indicator.classList.add('collapsed');
+                    }}
+                }}
+            }}
+        }}
+        
+        document.addEventListener('DOMContentLoaded', function() {{
+            var sections = ['publications_content'];
+            sections.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.style.display = 'none';
+                }}
+            }});
+            var indicators = ['publications_indicator'];
+            indicators.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.textContent = '▶';
+                    el.classList.add('collapsed');
+                }}
+            }});
+        }});
+    </script>
+</body>
+</html>'''
+    
+    return html_content
 
-def step_year_selection():
-    """Step 4: Select publication years - free text input"""
-    st.markdown("""
-    <div class="step-card">
-        <h3 style="margin: 0; font-size: 1.3rem;">⏰ Step 4: Select Publication Years</h3>
-        <p style="margin: 5px 0; font-size: 0.9rem;">Enter the publication years for analysis (any format supported).</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    if 'selected_topic_id' not in st.session_state:
-        st.error("❌ Topic not selected. Please go back to Step 3.")
-        return
-    
-    # Back button
-    col_back, col_main = st.columns([1, 5])
-    with col_back:
-        if st.button("← Back", use_container_width=True):
-            st.session_state.current_step = 3
-            # Keep selected topic but clear years and dependent data
-            if 'selected_years' in st.session_state:
-                del st.session_state.selected_years
-            if 'all_works' in st.session_state:
-                del st.session_state.all_works
-            if 'enriched_count' in st.session_state:
-                del st.session_state.enriched_count
-            if 'pdf_cache' in st.session_state:
-                del st.session_state.pdf_cache
-            if 'all_reports_generated' in st.session_state:
-                del st.session_state.all_reports_generated
-            if 'filtered_articles' in st.session_state:
-                del st.session_state.filtered_articles
-            if 'search_query' in st.session_state:
-                del st.session_state.search_query
-            if 'search_results_count' in st.session_state:
-                del st.session_state.search_results_count
-            if 'years_input' in st.session_state:
-                del st.session_state.years_input
-            st.rerun()
-    
-    topic_id = st.session_state.selected_topic_id
-    topic_name = st.session_state.get('selected_topic', 'Selected Topic')
-    
-    st.markdown(f"""
-    <div style="background: white; border-radius: 8px; padding: 12px; border: 1px solid #ced4da; margin-bottom: 15px;">
-        <strong>Selected Topic:</strong> {topic_name}
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="filter-section" style="background: rgba(255, 255, 255, 0.9); border-radius: 20px; padding: 20px; margin-bottom: 20px; border: 1px solid rgba(102, 126, 234, 0.2);">
-        <div class="filter-header" style="font-size: 1.1rem; font-weight: 600; color: #495057; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #667eea;">
-            📅 Publication Years
-        </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div style="font-size: 0.9rem; color: #666; margin-bottom: 10px;">
-        <strong>Supported formats:</strong>
-    </div>
-    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">
-        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2000</span>
-        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2010</span>
-        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2010-2020</span>
-        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2020</span>
-        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2023-2026</span>
-        <span style="background: #fff3e0; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem; border: 1px dashed #ff9800;">2005,2010-2015,2020</span>
-        <span style="background: #fff3e0; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem; border: 1px dashed #ff9800;">2015,2018-2020,2022-2024</span>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    years_input = st.text_input(
-        "Enter publication years",
-        value=st.session_state.get('years_input', ''),
-        placeholder="Example: 2000 or 2010 or 2010-2020 or 2020 or 2023-2026 or 2015,2018-2020,2022",
-        help="Enter years in any format: single year (2020), range (2010-2020), or combination (2015,2018-2020,2022)"
-    )
-    
-    st.markdown("</div>", unsafe_allow_html=True)
-    
-    if years_input:
-        years = parse_year_filter(years_input)
-        if years:
-            years_str = format_year_filter_for_filename(years)
-            st.markdown(f"""
-            <div style="background: #e8f5e9; border-radius: 8px; padding: 12px; border-left: 4px solid #4CAF50; margin: 10px 0;">
-                <strong>✅ Selected years:</strong> {', '.join(map(str, years))}
-                <br><span style="font-size: 0.85rem; color: #666;">Total: {len(years)} years</span>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div style="background: #ffebee; border-radius: 8px; padding: 12px; border-left: 4px solid #f44336; margin: 10px 0;">
-                <strong>❌ Invalid format:</strong> Please check your input.
-                <br><span style="font-size: 0.85rem; color: #666;">Example: 2000, 2010-2020, 2015,2018-2020,2022</span>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # Remove the Reset Cached Data button as per requirement
-    
-    st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("📊 Generate Reports", type="primary", use_container_width=True):
-            if not years_input:
-                st.error("❌ Please enter at least one year.")
-                return
-            
-            years = parse_year_filter(years_input)
-            if not years:
-                st.error("❌ Invalid year format. Please check your input.")
-                return
-            
-            # Clear cached data when years change
-            if 'selected_years' in st.session_state and st.session_state.selected_years != years:
-                if 'all_works' in st.session_state:
-                    del st.session_state.all_works
-                if 'enriched_count' in st.session_state:
-                    del st.session_state.enriched_count
-                if 'pdf_cache' in st.session_state:
-                    del st.session_state.pdf_cache
-                if 'all_reports_generated' in st.session_state:
-                    del st.session_state.all_reports_generated
-                if 'filtered_articles' in st.session_state:
-                    del st.session_state.filtered_articles
-                if 'search_query' in st.session_state:
-                    del st.session_state.search_query
-                if 'search_results_count' in st.session_state:
-                    del st.session_state.search_results_count
-            
-            st.session_state.selected_years = years
-            st.session_state.years_input = years_input
-            st.session_state.current_step = 5
-            st.rerun()
-
-def step_results():
-    """Step 5: Results with 3 PDF reports"""
-    st.markdown("""
-    <div class="step-card">
-        <h3 style="margin: 0; font-size: 1.3rem;">📊 Step 5: Analysis Results</h3>
-        <p style="margin: 5px 0; font-size: 0.9rem;">Download reports for your research topic.</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    if 'selected_topic_id' not in st.session_state:
-        st.error("❌ Topic not selected. Please go back.")
-        return
-    
-    # Back button
-    col_back, col_main = st.columns([1, 5])
-    with col_back:
-        if st.button("← Back", use_container_width=True):
-            st.session_state.current_step = 4
-            # Keep years but allow changes
-            st.rerun()
-    
-    topic_id = st.session_state.selected_topic_id
-    topic_name = st.session_state.get('selected_topic', 'Selected Topic')
-    years = st.session_state.get('selected_years', [])
-    
-    if not years:
-        st.error("❌ Years not selected. Please go back.")
-        return
-    
-    # Fetch ALL works for the topic with given years (no citation filtering)
-    if 'all_works' not in st.session_state:
-        with st.spinner(f"Loading ALL works for topic '{topic_name}'..."):
-            all_works = fetch_all_works_by_topic_sync(topic_id, years)
-            
-            if not all_works:
-                st.error("❌ No works found for this topic and year range.")
-                return
-            
-            enriched_works = []
-            for work in all_works:
-                enriched = enrich_work_data_full(work)
-                if enriched.get('title') and enriched.get('title') != 'No title':
-                    enriched_works.append(enriched)
-            
-            st.session_state.all_works = enriched_works
-            st.session_state.enriched_count = len(enriched_works)
-    else:
-        enriched_works = st.session_state.all_works
-    
-    if not enriched_works:
-        st.warning("⚠️ No valid works found after enrichment.")
-        return
-    
-    # Use filtered articles if available, otherwise use all works
-    if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
-        current_articles = st.session_state.filtered_articles
-        st.info(f"🔍 Showing {len(current_articles)} filtered articles (out of {len(enriched_works)} total)")
-    else:
-        current_articles = enriched_works
-    
-    # Statistics
-    total_articles = len(current_articles)
-    total_citations = sum(w.get('cited_by_count', 0) for w in current_articles)
-    avg_citations = total_citations / total_articles if total_articles > 0 else 0
-    
-    # Sorting options
-    st.markdown("### ⚙️ Report Sorting Options")
-    
-    col_sort1, col_sort2, col_sort3 = st.columns(3)
-    
-    with col_sort1:
-        sort_publisher = st.radio(
-            "Publisher → Journal sorting:",
-            options=["Alphabetical", "By Article Count"],
-            index=0,
-            key="sort_publisher"
-        )
-    
-    with col_sort2:
-        sort_citations = st.radio(
-            "Citations Report sorting:",
-            options=["Citations per Year", "Total Citations", "Publication Date (Newest First)"],
-            index=0,
-            key="sort_citations"
-        )
-    
-    with col_sort3:
-        sort_country = st.radio(
-            "Country → Affiliation sorting:",
-            options=["Alphabetical", "By Article Count"],
-            index=0,
-            key="sort_country"
-        )
-    
-    # Convert UI options to function parameters
-    sort_publisher_param = 'alphabetical' if sort_publisher == "Alphabetical" else 'by_count'
-    sort_citations_param = 'citations_per_year' if sort_citations == "Citations per Year" else ('total_citations' if sort_citations == "Total Citations" else 'publication_date')
-    sort_country_param = 'alphabetical' if sort_country == "Alphabetical" else 'by_count'
-    
-    # Generate groupings with caching using unique keys
-    with st.spinner("Generating report groupings..."):
-        # Create unique cache keys based on all parameters
-        filter_hash = hashlib.md5(str(sorted([a.get('doi', '') for a in current_articles])).encode()).hexdigest()[:8]
-        
-        publisher_hierarchy = cached_group_articles_by_publisher_journal(
-            tuple(current_articles), 
-            sort_publisher_param
-        )
-        
-        country_hierarchy = cached_group_articles_by_country_affiliation(
-            tuple(current_articles), 
-            sort_country_param
-        )
-        
-        citations_sorted = cached_sort_articles_by_citations(
-            tuple(current_articles), 
-            sort_citations_param
-        )
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">{total_articles:,}</div>
-            <div class="metric-label">Total Articles</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">{len(publisher_hierarchy)}</div>
-            <div class="metric-label">Publishers</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">{len(country_hierarchy)}</div>
-            <div class="metric-label">Countries</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col4:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value">{avg_citations:.1f}</div>
-            <div class="metric-label">Avg Citations/Year</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-    st.markdown("### 📥 Download Reports")
-    
-    journal_name = topic_name
-    journal_abbr = generate_journal_abbreviation(journal_name)
-    logo_path = None
-    
-    possible_paths = [
-        "logo.png",
-        "./logo.png",
-        "app/logo.png",
-        os.path.join(os.path.dirname(__file__), "logo.png"),
-        os.path.join(os.getcwd(), "logo.png")
-    ]
-    for path in possible_paths:
-        if os.path.exists(path):
-            logo_path = path
-            break
-    
-    if 'pdf_cache' not in st.session_state:
-        st.session_state.pdf_cache = {}
-    if 'all_reports_generated' not in st.session_state:
-        st.session_state.all_reports_generated = False
-    
-    # Create unique cache keys including all parameters
-    filter_hash = hashlib.md5(str(sorted([a.get('doi', '') for a in current_articles])).encode()).hexdigest()[:8]
-    years_hash = hashlib.md5(','.join(map(str, years)).encode()).hexdigest()[:8]
-    
-    cache_key_publisher = f"publisher_{topic_id}_{years_hash}_{filter_hash}_{sort_publisher_param}"
-    cache_key_citations = f"citations_{topic_id}_{years_hash}_{filter_hash}_{sort_citations_param}"
-    cache_key_country = f"country_{topic_id}_{years_hash}_{filter_hash}_{sort_country_param}"
-    
-    # Advanced Search button
-    col_adv1, col_adv2, col_adv3 = st.columns([1, 2, 1])
-    with col_adv2:
-        if st.button("🔍 Advanced Search (Filter Articles)", type="secondary", use_container_width=True):
-            st.session_state.current_step = 6
-            st.rerun()
-    
-    st.markdown("---")
-    
-    col_gen1, col_gen2, col_gen3 = st.columns([1, 1, 1])
-    with col_gen2:
-        if not st.session_state.all_reports_generated:
-            if st.button("⚡ Generate All Reports", type="primary", use_container_width=True):
-                with st.spinner("Generating all reports..."):
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    status_text.text("Generating Publisher → Journal report...")
-                    if cache_key_publisher not in st.session_state.pdf_cache:
-                        st.session_state.pdf_cache[cache_key_publisher] = generate_pdf_by_publisher_journal(
-                            journal_name, journal_abbr, years,
-                            publisher_hierarchy, logo_path,
-                            "Report by Publisher & Journal",
-                            sort_publisher_param
-                        )
-                    progress_bar.progress(0.33)
-                    
-                    status_text.text("Generating Citations per Year report...")
-                    if cache_key_citations not in st.session_state.pdf_cache:
-                        st.session_state.pdf_cache[cache_key_citations] = generate_pdf_by_citations(
-                            journal_name, journal_abbr, years,
-                            citations_sorted, logo_path,
-                            "Report by Citations",
-                            sort_citations_param
-                        )
-                    progress_bar.progress(0.66)
-                    
-                    status_text.text("Generating Country → Affiliation report...")
-                    if cache_key_country not in st.session_state.pdf_cache:
-                        st.session_state.pdf_cache[cache_key_country] = generate_pdf_by_country_affiliation(
-                            journal_name, journal_abbr, years,
-                            country_hierarchy, logo_path,
-                            "Report by Country & Affiliation",
-                            sort_country_param
-                        )
-                    progress_bar.progress(1.0)
-                    
-                    status_text.text("✅ All reports generated!")
-                    st.session_state.all_reports_generated = True
-                    time.sleep(0.5)
-                    st.rerun()
-        else:
-            st.success("✅ All reports already generated! Use the buttons below to download.")
-    
-    st.markdown("---")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("**📚 Report 1: Publisher → Journal**")
-        st.markdown(f"*{sort_publisher} sorting*")
-        
-        if cache_key_publisher in st.session_state.pdf_cache:
-            pdf_data = st.session_state.pdf_cache[cache_key_publisher]
-        else:
-            pdf_data = None
-        
-        if pdf_data is not None:
-            filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_publisher_journal.pdf"
-            st.download_button(
-                label="📄 Download Publisher Report",
-                data=pdf_data,
-                file_name=filename,
-                mime="application/pdf",
-                use_container_width=True,
-                key=f"pdf_publisher_download_{cache_key_publisher}"
-            )
-        else:
-            if st.button("📄 Generate Publisher Report", key=f"gen_publisher_{cache_key_publisher}", use_container_width=True):
-                with st.spinner("Generating Publisher Report..."):
-                    pdf_data = generate_pdf_by_publisher_journal(
-                        journal_name, journal_abbr, years,
-                        publisher_hierarchy, logo_path,
-                        "Report by Publisher & Journal",
-                        sort_publisher_param
-                    )
-                    st.session_state.pdf_cache[cache_key_publisher] = pdf_data
-                    st.rerun()
-    
-    with col2:
-        st.markdown("**📈 Report 2: Citations**")
-        st.markdown(f"*{sort_citations} sorting*")
-        
-        if cache_key_citations in st.session_state.pdf_cache:
-            pdf_data = st.session_state.pdf_cache[cache_key_citations]
-        else:
-            pdf_data = None
-        
-        if pdf_data is not None:
-            filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_citations.pdf"
-            st.download_button(
-                label="📄 Download Citations Report",
-                data=pdf_data,
-                file_name=filename,
-                mime="application/pdf",
-                use_container_width=True,
-                key=f"pdf_citations_download_{cache_key_citations}"
-            )
-        else:
-            if st.button("📄 Generate Citations Report", key=f"gen_citations_{cache_key_citations}", use_container_width=True):
-                with st.spinner("Generating Citations Report..."):
-                    pdf_data = generate_pdf_by_citations(
-                        journal_name, journal_abbr, years,
-                        citations_sorted, logo_path,
-                        "Report by Citations",
-                        sort_citations_param
-                    )
-                    st.session_state.pdf_cache[cache_key_citations] = pdf_data
-                    st.rerun()
-    
-    with col3:
-        st.markdown("**🌍 Report 3: Country → Affiliation**")
-        st.markdown(f"*{sort_country} sorting*")
-        
-        if cache_key_country in st.session_state.pdf_cache:
-            pdf_data = st.session_state.pdf_cache[cache_key_country]
-        else:
-            pdf_data = None
-        
-        if pdf_data is not None:
-            filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_country_affiliation.pdf"
-            st.download_button(
-                label="📄 Download Country Report",
-                data=pdf_data,
-                file_name=filename,
-                mime="application/pdf",
-                use_container_width=True,
-                key=f"pdf_country_download_{cache_key_country}"
-            )
-        else:
-            if st.button("📄 Generate Country Report", key=f"gen_country_{cache_key_country}", use_container_width=True):
-                with st.spinner("Generating Country Report..."):
-                    pdf_data = generate_pdf_by_country_affiliation(
-                        journal_name, journal_abbr, years,
-                        country_hierarchy, logo_path,
-                        "Report by Country & Affiliation",
-                        sort_country_param
-                    )
-                    st.session_state.pdf_cache[cache_key_country] = pdf_data
-                    st.rerun()
-    
-    st.markdown("---")
-    
-    if st.session_state.all_reports_generated:
-        if all(key in st.session_state.pdf_cache for key in [cache_key_publisher, cache_key_citations, cache_key_country]):
-            try:
-                import zipfile
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_publisher_journal.pdf", 
-                                     st.session_state.pdf_cache[cache_key_publisher])
-                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_citations.pdf", 
-                                     st.session_state.pdf_cache[cache_key_citations])
-                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_country_affiliation.pdf", 
-                                     st.session_state.pdf_cache[cache_key_country])
-                
-                zip_data = zip_buffer.getvalue()
-                
-                col_zip1, col_zip2, col_zip3 = st.columns([1, 2, 1])
-                with col_zip2:
-                    st.download_button(
-                        label="📦 Download All Reports (ZIP archive)",
-                        data=zip_data,
-                        file_name=f"{journal_abbr}_{format_year_filter_for_filename(years)}_all_reports.zip",
-                        mime="application/zip",
-                        use_container_width=True,
-                        key="download_all_zip"
-                    )
-            except Exception as e:
-                st.error(f"Error creating ZIP archive: {e}")
-    
-    st.markdown("---")
-    
-    if st.button("🔄 New Analysis", use_container_width=True):
-        keys_to_clear = ['current_step', 'dois', 'works_data', 'topic_counter', 
-                        'keyword_counter', 'successful', 'failed', 'selected_topic',
-                        'selected_topic_id', 'selected_years', 'all_works', 
-                        'enriched_count', 'years_input', 'pdf_cache', 'all_reports_generated',
-                        'filtered_articles', 'search_query', 'search_results_count']
-        for key in keys_to_clear:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.session_state.current_step = 1
-        st.rerun()
 
 # ============================================================================
 # STEP 6: ADVANCED SEARCH
@@ -4035,6 +3598,374 @@ def step_advanced_search():
                 del st.session_state[key]
         st.session_state.current_step = 1
         st.rerun()
+
+# ============================================================================
+# STEP 5: RESULTS (UPDATED WITH HTML REPORTS)
+# ============================================================================
+
+def step_results():
+    """Step 5: Results with 3 HTML reports"""
+    st.markdown("""
+    <div class="step-card">
+        <h3 style="margin: 0; font-size: 1.3rem;">📊 Step 5: Analysis Results</h3>
+        <p style="margin: 5px 0; font-size: 0.9rem;">Download reports for your research topic.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if 'selected_topic_id' not in st.session_state:
+        st.error("❌ Topic not selected. Please go back.")
+        return
+    
+    # Back button
+    col_back, col_main = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.current_step = 4
+            # Keep years but allow changes
+            st.rerun()
+    
+    topic_id = st.session_state.selected_topic_id
+    topic_name = st.session_state.get('selected_topic', 'Selected Topic')
+    years = st.session_state.get('selected_years', [])
+    
+    if not years:
+        st.error("❌ Years not selected. Please go back.")
+        return
+    
+    # Fetch ALL works for the topic with given years (no citation filtering)
+    if 'all_works' not in st.session_state:
+        with st.spinner(f"Loading ALL works for topic '{topic_name}'..."):
+            all_works = fetch_all_works_by_topic_sync(topic_id, years)
+            
+            if not all_works:
+                st.error("❌ No works found for this topic and year range.")
+                return
+            
+            enriched_works = []
+            for work in all_works:
+                enriched = enrich_work_data_full(work)
+                if enriched.get('title') and enriched.get('title') != 'No title':
+                    enriched_works.append(enriched)
+            
+            st.session_state.all_works = enriched_works
+            st.session_state.enriched_count = len(enriched_works)
+    else:
+        enriched_works = st.session_state.all_works
+    
+    if not enriched_works:
+        st.warning("⚠️ No valid works found after enrichment.")
+        return
+    
+    # Use filtered articles if available, otherwise use all works
+    if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
+        current_articles = st.session_state.filtered_articles
+        st.info(f"🔍 Showing {len(current_articles)} filtered articles (out of {len(enriched_works)} total)")
+    else:
+        current_articles = enriched_works
+    
+    # Statistics
+    total_articles = len(current_articles)
+    total_citations = sum(w.get('cited_by_count', 0) for w in current_articles)
+    avg_citations = total_citations / total_articles if total_articles > 0 else 0
+    
+    # Sorting options
+    st.markdown("### ⚙️ Report Sorting Options")
+    
+    col_sort1, col_sort2, col_sort3 = st.columns(3)
+    
+    with col_sort1:
+        sort_publisher = st.radio(
+            "Publisher → Journal sorting:",
+            options=["Alphabetical", "By Article Count"],
+            index=0,
+            key="sort_publisher"
+        )
+    
+    with col_sort2:
+        sort_citations = st.radio(
+            "Citations Report sorting:",
+            options=["Citations per Year", "Total Citations", "Publication Date (Newest First)"],
+            index=0,
+            key="sort_citations"
+        )
+    
+    with col_sort3:
+        sort_country = st.radio(
+            "Country → Affiliation sorting:",
+            options=["Alphabetical", "By Article Count"],
+            index=0,
+            key="sort_country"
+        )
+    
+    # Convert UI options to function parameters
+    sort_publisher_param = 'alphabetical' if sort_publisher == "Alphabetical" else 'by_count'
+    sort_citations_param = 'citations_per_year' if sort_citations == "Citations per Year" else ('total_citations' if sort_citations == "Total Citations" else 'publication_date')
+    sort_country_param = 'alphabetical' if sort_country == "Alphabetical" else 'by_count'
+    
+    # Generate groupings with caching using unique keys
+    with st.spinner("Generating report groupings..."):
+        # Create unique cache keys based on all parameters
+        filter_hash = hashlib.md5(str(sorted([a.get('doi', '') for a in current_articles])).encode()).hexdigest()[:8]
+        
+        publisher_hierarchy = cached_group_articles_by_publisher_journal(
+            tuple(current_articles), 
+            sort_publisher_param
+        )
+        
+        country_hierarchy = cached_group_articles_by_country_affiliation(
+            tuple(current_articles), 
+            sort_country_param
+        )
+        
+        citations_sorted = cached_sort_articles_by_citations(
+            tuple(current_articles), 
+            sort_citations_param
+        )
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{total_articles:,}</div>
+            <div class="metric-label">Total Articles</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{len(publisher_hierarchy)}</div>
+            <div class="metric-label">Publishers</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{len(country_hierarchy)}</div>
+            <div class="metric-label">Countries</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{avg_citations:.1f}</div>
+            <div class="metric-label">Avg Citations/Year</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("### 📥 Download Reports")
+    
+    journal_name = topic_name
+    journal_abbr = generate_journal_abbreviation(journal_name)
+    
+    if 'html_cache' not in st.session_state:
+        st.session_state.html_cache = {}
+    if 'all_reports_generated' not in st.session_state:
+        st.session_state.all_reports_generated = False
+    
+    # Create unique cache keys including all parameters
+    filter_hash = hashlib.md5(str(sorted([a.get('doi', '') for a in current_articles])).encode()).hexdigest()[:8]
+    years_hash = hashlib.md5(','.join(map(str, years)).encode()).hexdigest()[:8]
+    
+    cache_key_publisher = f"html_publisher_{topic_id}_{years_hash}_{filter_hash}_{sort_publisher_param}"
+    cache_key_citations = f"html_citations_{topic_id}_{years_hash}_{filter_hash}_{sort_citations_param}"
+    cache_key_country = f"html_country_{topic_id}_{years_hash}_{filter_hash}_{sort_country_param}"
+    
+    # Advanced Search button
+    col_adv1, col_adv2, col_adv3 = st.columns([1, 2, 1])
+    with col_adv2:
+        if st.button("🔍 Advanced Search (Filter Articles)", type="secondary", use_container_width=True):
+            st.session_state.current_step = 6
+            st.rerun()
+    
+    st.markdown("---")
+    
+    col_gen1, col_gen2, col_gen3 = st.columns([1, 1, 1])
+    with col_gen2:
+        if not st.session_state.all_reports_generated:
+            if st.button("⚡ Generate All Reports", type="primary", use_container_width=True):
+                with st.spinner("Generating all HTML reports..."):
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    status_text.text("Generating Publisher → Journal report...")
+                    if cache_key_publisher not in st.session_state.html_cache:
+                        st.session_state.html_cache[cache_key_publisher] = generate_html_by_publisher_journal(
+                            journal_name, journal_abbr, years,
+                            publisher_hierarchy,
+                            "Report by Publisher & Journal",
+                            sort_publisher_param
+                        )
+                    progress_bar.progress(0.33)
+                    
+                    status_text.text("Generating Citations per Year report...")
+                    if cache_key_citations not in st.session_state.html_cache:
+                        st.session_state.html_cache[cache_key_citations] = generate_html_by_citations(
+                            journal_name, journal_abbr, years,
+                            citations_sorted,
+                            "Report by Citations",
+                            sort_citations_param
+                        )
+                    progress_bar.progress(0.66)
+                    
+                    status_text.text("Generating Country → Affiliation report...")
+                    if cache_key_country not in st.session_state.html_cache:
+                        st.session_state.html_cache[cache_key_country] = generate_html_by_country_affiliation(
+                            journal_name, journal_abbr, years,
+                            country_hierarchy,
+                            "Report by Country & Affiliation",
+                            sort_country_param
+                        )
+                    progress_bar.progress(1.0)
+                    
+                    status_text.text("✅ All reports generated!")
+                    st.session_state.all_reports_generated = True
+                    time.sleep(0.5)
+                    st.rerun()
+        else:
+            st.success("✅ All reports already generated! Use the buttons below to download.")
+    
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("**📚 Report 1: Publisher → Journal**")
+        st.markdown(f"*{sort_publisher} sorting*")
+        
+        if cache_key_publisher in st.session_state.html_cache:
+            html_data = st.session_state.html_cache[cache_key_publisher]
+        else:
+            html_data = None
+        
+        if html_data is not None:
+            filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_publisher_journal.html"
+            st.download_button(
+                label="📄 Download Publisher Report (HTML)",
+                data=html_data,
+                file_name=filename,
+                mime="text/html",
+                use_container_width=True,
+                key=f"html_publisher_download_{cache_key_publisher}"
+            )
+        else:
+            if st.button("📄 Generate Publisher Report", key=f"gen_html_publisher_{cache_key_publisher}", use_container_width=True):
+                with st.spinner("Generating Publisher Report..."):
+                    html_data = generate_html_by_publisher_journal(
+                        journal_name, journal_abbr, years,
+                        publisher_hierarchy,
+                        "Report by Publisher & Journal",
+                        sort_publisher_param
+                    )
+                    st.session_state.html_cache[cache_key_publisher] = html_data
+                    st.rerun()
+    
+    with col2:
+        st.markdown("**📈 Report 2: Citations**")
+        st.markdown(f"*{sort_citations} sorting*")
+        
+        if cache_key_citations in st.session_state.html_cache:
+            html_data = st.session_state.html_cache[cache_key_citations]
+        else:
+            html_data = None
+        
+        if html_data is not None:
+            filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_citations.html"
+            st.download_button(
+                label="📄 Download Citations Report (HTML)",
+                data=html_data,
+                file_name=filename,
+                mime="text/html",
+                use_container_width=True,
+                key=f"html_citations_download_{cache_key_citations}"
+            )
+        else:
+            if st.button("📄 Generate Citations Report", key=f"gen_html_citations_{cache_key_citations}", use_container_width=True):
+                with st.spinner("Generating Citations Report..."):
+                    html_data = generate_html_by_citations(
+                        journal_name, journal_abbr, years,
+                        citations_sorted,
+                        "Report by Citations",
+                        sort_citations_param
+                    )
+                    st.session_state.html_cache[cache_key_citations] = html_data
+                    st.rerun()
+    
+    with col3:
+        st.markdown("**🌍 Report 3: Country → Affiliation**")
+        st.markdown(f"*{sort_country} sorting*")
+        
+        if cache_key_country in st.session_state.html_cache:
+            html_data = st.session_state.html_cache[cache_key_country]
+        else:
+            html_data = None
+        
+        if html_data is not None:
+            filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_country_affiliation.html"
+            st.download_button(
+                label="📄 Download Country Report (HTML)",
+                data=html_data,
+                file_name=filename,
+                mime="text/html",
+                use_container_width=True,
+                key=f"html_country_download_{cache_key_country}"
+            )
+        else:
+            if st.button("📄 Generate Country Report", key=f"gen_html_country_{cache_key_country}", use_container_width=True):
+                with st.spinner("Generating Country Report..."):
+                    html_data = generate_html_by_country_affiliation(
+                        journal_name, journal_abbr, years,
+                        country_hierarchy,
+                        "Report by Country & Affiliation",
+                        sort_country_param
+                    )
+                    st.session_state.html_cache[cache_key_country] = html_data
+                    st.rerun()
+    
+    st.markdown("---")
+    
+    if st.session_state.all_reports_generated:
+        if all(key in st.session_state.html_cache for key in [cache_key_publisher, cache_key_citations, cache_key_country]):
+            try:
+                import zipfile
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_publisher_journal.html", 
+                                     st.session_state.html_cache[cache_key_publisher])
+                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_citations.html", 
+                                     st.session_state.html_cache[cache_key_citations])
+                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_country_affiliation.html", 
+                                     st.session_state.html_cache[cache_key_country])
+                
+                zip_data = zip_buffer.getvalue()
+                
+                col_zip1, col_zip2, col_zip3 = st.columns([1, 2, 1])
+                with col_zip2:
+                    st.download_button(
+                        label="📦 Download All Reports (ZIP archive)",
+                        data=zip_data,
+                        file_name=f"{journal_abbr}_{format_year_filter_for_filename(years)}_all_reports.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key="download_all_zip"
+                    )
+            except Exception as e:
+                st.error(f"Error creating ZIP archive: {e}")
+    
+    st.markdown("---")
+    
+    if st.button("🔄 New Analysis", use_container_width=True):
+        keys_to_clear = ['current_step', 'dois', 'works_data', 'topic_counter', 
+                        'keyword_counter', 'successful', 'failed', 'selected_topic',
+                        'selected_topic_id', 'selected_years', 'all_works', 
+                        'enriched_count', 'years_input', 'html_cache', 'all_reports_generated',
+                        'filtered_articles', 'search_query', 'search_results_count']
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.session_state.current_step = 1
+        st.rerun()
+
 
 # ============================================================================
 # STOPWORDS
