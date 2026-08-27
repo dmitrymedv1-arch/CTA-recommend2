@@ -1734,7 +1734,7 @@ def get_color_scale_html(value: float, max_val: float, min_val: float = 0, unit:
 def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, years: List[int],
                                        hierarchy: Dict, report_title: str = "Report by Publisher & Journal",
                                        sort_option: str = 'alphabetical') -> str:
-    """Generate HTML report grouping articles by Publisher -> Journal."""
+    """Generate HTML report grouping articles by Publisher -> Journal with hierarchical expandable lists."""
     
     # Get filter info from session_state
     search_query = st.session_state.get('search_query', '')
@@ -1749,26 +1749,28 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
     primary = '#667eea'
     secondary = '#764ba2'
     
-    # Build navigation items
+    # Build navigation items for sidebar - Publisher level
     nav_items = []
     nav_items.append(f'<a href="#overview"><span class="nav-icon">📋</span> Overview</a>')
-    nav_items.append(f'<a href="#publications"><span class="nav-icon">📄</span> Publications</a>')
+    nav_items.append(f'<a href="#publications"><span class="nav-icon">📚</span> Publishers</a>')
     
+    # Add publisher links to sidebar
     for publisher in hierarchy.keys():
         publisher_id = hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]
-        nav_items.append(f'<a href="#publisher_{publisher_id}"><span class="nav-icon">📚</span> {escape_html(publisher[:30])}</a>')
+        publisher_articles = sum(len(articles) for articles in hierarchy[publisher].values())
+        nav_items.append(f'<a href="#publisher_{publisher_id}" style="padding-left: 20px;"><span class="nav-icon">📖</span> {escape_html(publisher[:25])} <span style="font-size: 10px; opacity: 0.7;">({publisher_articles})</span></a>')
     
-    # Build TOC items
+    # Build TOC items - hierarchical table of contents
     toc_items = []
     for publisher, journals in hierarchy.items():
         publisher_articles = sum(len(articles) for articles in journals.values())
         publisher_id = hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]
-        toc_items.append(f'<div class="toc-item"><a href="#publisher_{publisher_id}">{escape_html(publisher)} ({publisher_articles} articles)</a></div>')
+        toc_items.append(f'<div class="toc-item toc-publisher"><a href="#publisher_{publisher_id}">📖 {escape_html(publisher)} <span class="toc-badge">{publisher_articles}</span></a></div>')
         
         for journal, articles in journals.items():
             journal_articles = len(articles)
             journal_id = hashlib.md5(f"{publisher}_{journal}".encode('utf-8')).hexdigest()[:8]
-            toc_items.append(f'<div class="toc-item toc-sub"><a href="#journal_{journal_id}">└ {escape_html(journal)} ({journal_articles} articles)</a></div>')
+            toc_items.append(f'<div class="toc-item toc-journal"><a href="#journal_{journal_id}">└ 📄 {escape_html(journal)} <span class="toc-badge">{journal_articles}</span></a></div>')
     
     # Build main content
     main_content = []
@@ -1812,7 +1814,7 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             
             <div style="margin-top: 15px;">
                 <h3 style="color: {primary}; font-size: 16px;">📑 Table of Contents</h3>
-                <div style="max-height: 300px; overflow-y: auto; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                <div style="max-height: 400px; overflow-y: auto; padding: 10px; background: #f8f9fa; border-radius: 8px;">
                     {''.join(toc_items)}
                 </div>
             </div>
@@ -1820,12 +1822,12 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
     </div>
     ''')
     
-    # Publications section
+    # Publications section with hierarchical expandable lists
     main_content.append(f'''
     <div id="publications" class="section">
         <div class="section-header" onclick="toggleSection('publications_content')">
             <div class="section-title">
-                <span class="icon">📄</span> Publications
+                <span class="icon">📚</span> Publications by Publisher & Journal
                 <span class="section-badge">{total_articles} articles</span>
             </div>
             <span class="toggle-indicator" id="publications_indicator">▼</span>
@@ -1834,22 +1836,38 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
         <div id="publications_content" class="section-content">
     ''')
     
-    # Publisher -> Journal hierarchy
+    # Publisher -> Journal hierarchy with expandable lists
+    publisher_counter = 0
     for publisher, journals in hierarchy.items():
         publisher_articles = sum(len(articles) for articles in journals.values())
         publisher_id = hashlib.md5(publisher.encode('utf-8')).hexdigest()[:8]
+        publisher_counter += 1
+        is_first_publisher = (publisher_counter == 1)
         
         main_content.append(f'''
-        <div id="publisher_{publisher_id}" style="margin-bottom: 20px;">
-            <h3 style="color: {primary}; font-size: 18px; margin-bottom: 8px;">📚 {escape_html(publisher)} <span class="section-badge">{publisher_articles} articles</span></h3>
+        <div id="publisher_{publisher_id}" class="publisher-section">
+            <div class="publisher-header" onclick="togglePublisher('{publisher_id}')">
+                <span class="toggle-icon" id="publisher_icon_{publisher_id}">{'▼' if is_first_publisher else '▶'}</span>
+                <span class="publisher-name">📖 {escape_html(publisher)}</span>
+                <span class="badge">{publisher_articles} articles</span>
+            </div>
+            <div class="publisher-content" id="publisher_content_{publisher_id}" style="display: {'block' if is_first_publisher else 'none'};">
         ''')
         
+        journal_counter = 0
         for journal, articles in journals.items():
             journal_id = hashlib.md5(f"{publisher}_{journal}".encode('utf-8')).hexdigest()[:8]
+            journal_counter += 1
+            is_first_journal = (journal_counter == 1 and is_first_publisher)
             
             main_content.append(f'''
-            <div id="journal_{journal_id}" style="margin: 12px 0 12px 20px;">
-                <h4 style="color: {secondary}; font-size: 15px; margin-bottom: 6px;">📖 {escape_html(journal)} <span class="section-badge" style="background: {secondary};">{len(articles)} articles</span></h4>
+                <div id="journal_{journal_id}" class="journal-section">
+                    <div class="journal-header" onclick="toggleJournal('{journal_id}')">
+                        <span class="toggle-icon" id="journal_icon_{journal_id}">{'▼' if is_first_journal else '▶'}</span>
+                        <span class="journal-name">📄 {escape_html(journal)}</span>
+                        <span class="badge journal-badge">{len(articles)} articles</span>
+                    </div>
+                    <div class="journal-content" id="journal_content_{journal_id}" style="display: {'block' if is_first_journal else 'none'};">
             ''')
             
             for idx, article in enumerate(articles, 1):
@@ -1884,31 +1902,36 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
                 meta_str = ', '.join(meta_parts) if meta_parts else ''
                 
                 main_content.append(f'''
-                <div class="article-item" style="margin: 8px 0 8px 20px; padding: 10px 14px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
-                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                        <span style="font-weight: 600; color: {primary};">{idx}.</span>
-                        <span style="font-weight: 500;">{title}</span>
-                        <span style="color: {type_color}; font-size: 0.85rem; background: {type_color}20; padding: 0 8px; border-radius: 10px;">{type_icon} {type_label}</span>
-                    </div>
-                    <div style="font-size: 0.9rem; color: #555; margin-top: 4px;">
-                        <strong>Authors:</strong> {authors}
-                    </div>
-                    {f'<div style="font-size: 0.85rem; color: #666;"><strong>Affiliations:</strong> {affiliations}</div>' if affiliations and affiliations != 'No affiliations specified' else ''}
-                    {f'<div style="font-size: 0.85rem; color: #666;"><strong>Journal:</strong> {escape_html(article.get("journal_name", ""))}</div>' if article.get("journal_name") else ''}
-                    {f'<div style="font-size: 0.85rem; color: #666;">{meta_str}</div>' if meta_str else ''}
-                    <div style="font-size: 0.85rem; color: #666; display: flex; flex-wrap: wrap; gap: 12px;">
-                        <span><strong>Citations:</strong> {citations}</span>
-                        <span><strong>Per year:</strong> {citations_per_year:.1f}</span>
-                        <span><strong>References:</strong> {references}</span>
-                        <span><strong>OA:</strong> {oa_status}</span>
-                    </div>
-                    {f'<div style="font-size: 0.8rem; margin-top: 2px;"><a href="{doi_url}" target="_blank" style="color: #2980B9; text-decoration: none;">{doi_url}</a></div>' if doi_url else ''}
-                </div>
+                        <div class="article-item" style="margin: 6px 0; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
+                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                                <span style="font-weight: 600; color: {primary}; font-size: 13px;">{idx}.</span>
+                                <span style="font-weight: 500; font-size: 14px;">{title}</span>
+                                <span style="color: {type_color}; font-size: 0.8rem; background: {type_color}20; padding: 0 8px; border-radius: 10px;">{type_icon} {type_label}</span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: #555; margin-top: 3px;">
+                                <strong>Authors:</strong> {authors}
+                            </div>
+                            {f'<div style="font-size: 0.8rem; color: #666;"><strong>Affiliations:</strong> {affiliations}</div>' if affiliations and affiliations != 'No affiliations specified' else ''}
+                            {f'<div style="font-size: 0.8rem; color: #666;">{meta_str}</div>' if meta_str else ''}
+                            <div style="font-size: 0.8rem; color: #666; display: flex; flex-wrap: wrap; gap: 10px; margin-top: 2px;">
+                                <span><strong>Citations:</strong> {citations}</span>
+                                <span><strong>Per year:</strong> {citations_per_year:.1f}</span>
+                                <span><strong>References:</strong> {references}</span>
+                                <span><strong>OA:</strong> {oa_status}</span>
+                            </div>
+                            {f'<div style="font-size: 0.75rem; margin-top: 2px;"><a href="{doi_url}" target="_blank" style="color: #2980B9; text-decoration: none;">{doi_url}</a></div>' if doi_url else ''}
+                        </div>
                 ''')
             
-            main_content.append('</div>')
+            main_content.append('''
+                    </div>
+                </div>
+            ''')
         
-        main_content.append('</div>')
+        main_content.append('''
+            </div>
+        </div>
+        ''')
     
     main_content.append('</div></div>')
     
@@ -1950,7 +1973,7 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             position: fixed;
             left: 0;
             top: 0;
-            width: 260px;
+            width: 280px;
             height: 100vh;
             background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
             color: white;
@@ -1977,9 +2000,9 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             text-decoration: none;
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 6px 12px;
-            margin: 2px 0;
+            gap: 8px;
+            padding: 4px 10px;
+            margin: 1px 0;
             border-radius: 6px;
             transition: all 0.3s;
             font-size: 12px;
@@ -1993,10 +2016,18 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             width: 22px;
             text-align: center;
         }}
+        .sidebar .sidebar-footer {{
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.2);
+            font-size: 10px;
+            opacity: 0.7;
+            line-height: 1.5;
+        }}
         
         /* Main Content */
         .main-content {{
-            margin-left: 260px;
+            margin-left: 280px;
             padding: 25px 35px;
         }}
         
@@ -2139,15 +2170,6 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             letter-spacing: 0.3px;
         }}
         
-        /* Article items */
-        .article-item {{
-            transition: all 0.2s;
-        }}
-        .article-item:hover {{
-            background: #e9ecef !important;
-            transform: translateX(3px);
-        }}
-        
         /* TOC */
         .toc-item {{
             padding: 3px 0;
@@ -2162,10 +2184,23 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             color: {primary};
             text-decoration: underline;
         }}
-        .toc-item.toc-sub {{
-            padding-left: 20px;
+        .toc-item.toc-publisher {{
+            font-weight: 600;
+            color: {primary};
+        }}
+        .toc-item.toc-journal {{
+            padding-left: 24px;
             font-size: 12px;
             color: #555;
+        }}
+        .toc-badge {{
+            display: inline-block;
+            background: #667eea20;
+            padding: 0 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            color: {primary};
         }}
         
         /* Color scale */
@@ -2182,6 +2217,106 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
         .color-scale-value:hover {{
             transform: scale(1.05);
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+        
+        /* Publisher Section - Hierarchical */
+        .publisher-section {{
+            margin: 12px 0 16px 0;
+            border-left: 4px solid {primary};
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+        .publisher-header {{
+            padding: 10px 16px;
+            background: linear-gradient(135deg, {primary}10, {secondary}10);
+            cursor: pointer;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.3s;
+            font-weight: 600;
+            font-size: 16px;
+            user-select: none;
+        }}
+        .publisher-header:hover {{
+            background: linear-gradient(135deg, {primary}20, {secondary}20);
+        }}
+        .publisher-name {{
+            flex: 1;
+            color: #2C3E50;
+        }}
+        .badge {{
+            display: inline-block;
+            background: linear-gradient(135deg, {primary}, {secondary});
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+        }}
+        .publisher-content {{
+            padding: 8px 0 8px 16px;
+            background: #fafbfc;
+        }}
+        
+        /* Journal Section - Hierarchical */
+        .journal-section {{
+            margin: 8px 0 8px 8px;
+            border-left: 3px solid {secondary};
+            border-radius: 4px;
+            overflow: hidden;
+        }}
+        .journal-header {{
+            padding: 6px 14px;
+            background: #f0f1f3;
+            cursor: pointer;
+            border-radius: 4px 4px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s;
+            font-weight: 500;
+            font-size: 14px;
+            user-select: none;
+        }}
+        .journal-header:hover {{
+            background: #e5e7eb;
+        }}
+        .journal-name {{
+            flex: 1;
+            color: #2C3E50;
+        }}
+        .journal-badge {{
+            background: linear-gradient(135deg, {secondary}, {primary});
+            font-size: 10px;
+            padding: 1px 10px;
+        }}
+        .journal-content {{
+            padding: 6px 0 6px 16px;
+            background: #f8f9fa;
+        }}
+        
+        /* Toggle Icons */
+        .toggle-icon {{
+            display: inline-block;
+            transition: transform 0.3s ease;
+            font-size: 14px;
+            color: {primary};
+            font-weight: 300;
+        }}
+        .toggle-icon.expanded {{
+            transform: rotate(90deg);
+        }}
+        
+        /* Article items */
+        .article-item {{
+            transition: all 0.2s;
+            margin: 4px 0;
+        }}
+        .article-item:hover {{
+            background: #e9ecef !important;
+            transform: translateX(3px);
         }}
         
         /* Footer */
@@ -2205,6 +2340,8 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             .header {{ padding: 15px 20px; }}
             .header h1 {{ font-size: 20px; }}
             .metrics-grid {{ grid-template-columns: repeat(2, 1fr); }}
+            .publisher-content {{ padding-left: 8px; }}
+            .journal-content {{ padding-left: 8px; }}
         }}
         
         @keyframes fadeInUp {{
@@ -2222,7 +2359,7 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
     <div class="sidebar">
         <h3>{escape_html(journal_abbr)}</h3>
         {''.join(nav_items)}
-        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 10px; opacity: 0.7; line-height: 1.5;">
+        <div class="sidebar-footer">
             <div>Period: {format_year_filter_for_filename(years)}</div>
             <div>Total: {total_articles} articles</div>
             <div style="margin-top: 3px; font-size: 9px; opacity: 0.6;">Generated: {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>
@@ -2243,6 +2380,49 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
     </div>
     
     <script>
+        // Toggle publisher section
+        function togglePublisher(publisherId) {{
+            var content = document.getElementById('publisher_content_' + publisherId);
+            var icon = document.getElementById('publisher_icon_' + publisherId);
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (icon) {{
+                        icon.textContent = '▼';
+                        icon.classList.add('expanded');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (icon) {{
+                        icon.textContent = '▶';
+                        icon.classList.remove('expanded');
+                    }}
+                }}
+            }}
+        }}
+        
+        // Toggle journal section
+        function toggleJournal(journalId) {{
+            var content = document.getElementById('journal_content_' + journalId);
+            var icon = document.getElementById('journal_icon_' + journalId);
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (icon) {{
+                        icon.textContent = '▼';
+                        icon.classList.add('expanded');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (icon) {{
+                        icon.textContent = '▶';
+                        icon.classList.remove('expanded');
+                    }}
+                }}
+            }}
+        }}
+        
+        // Toggle main section
         function toggleSection(sectionId) {{
             var content = document.getElementById(sectionId);
             var indicator = document.getElementById(sectionId.replace('_content', '_indicator'));
@@ -2263,7 +2443,7 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             }}
         }}
         
-        // Auto-open first section
+        // Auto-close publications section by default
         document.addEventListener('DOMContentLoaded', function() {{
             var sections = ['publications_content'];
             sections.forEach(function(id) {{
@@ -2844,7 +3024,7 @@ def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List
 def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, years: List[int],
                                         hierarchy: Dict, report_title: str = "Report by Country & Affiliation",
                                         sort_option: str = 'alphabetical') -> str:
-    """Generate HTML report grouping articles by Country -> Affiliation."""
+    """Generate HTML report grouping articles by Country -> Affiliation with hierarchical expandable lists."""
     
     # Get filter info from session_state
     search_query = st.session_state.get('search_query', '')
@@ -2862,23 +3042,24 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
     # Build navigation items
     nav_items = []
     nav_items.append(f'<a href="#overview"><span class="nav-icon">📋</span> Overview</a>')
-    nav_items.append(f'<a href="#publications"><span class="nav-icon">🌍</span> Publications</a>')
+    nav_items.append(f'<a href="#publications"><span class="nav-icon">🌍</span> Countries</a>')
     
     for country in hierarchy.keys():
         country_id = hashlib.md5(country.encode('utf-8')).hexdigest()[:8]
-        nav_items.append(f'<a href="#country_{country_id}"><span class="nav-icon">🌍</span> {escape_html(country[:20])}</a>')
+        country_articles = sum(len(articles) for articles in hierarchy[country].values())
+        nav_items.append(f'<a href="#country_{country_id}" style="padding-left: 20px;"><span class="nav-icon">🌍</span> {escape_html(country[:20])} <span style="font-size: 10px; opacity: 0.7;">({country_articles})</span></a>')
     
     # Build TOC items
     toc_items = []
     for country, affiliations in hierarchy.items():
         country_articles = sum(len(articles) for articles in affiliations.values())
         country_id = hashlib.md5(country.encode('utf-8')).hexdigest()[:8]
-        toc_items.append(f'<div class="toc-item"><a href="#country_{country_id}">{escape_html(country)} ({country_articles} articles)</a></div>')
+        toc_items.append(f'<div class="toc-item toc-country"><a href="#country_{country_id}">🌍 {escape_html(country)} <span class="toc-badge">{country_articles}</span></a></div>')
         
         for affiliation, articles in affiliations.items():
             aff_articles = len(articles)
             aff_id = hashlib.md5(f"{country}_{affiliation}".encode('utf-8')).hexdigest()[:8]
-            toc_items.append(f'<div class="toc-item toc-sub"><a href="#affiliation_{aff_id}">└ {escape_html(affiliation[:40])}{"..." if len(affiliation) > 40 else ""} ({aff_articles} articles)</a></div>')
+            toc_items.append(f'<div class="toc-item toc-affiliation"><a href="#affiliation_{aff_id}">└ 🏛️ {escape_html(affiliation[:40])}{"..." if len(affiliation) > 40 else ""} <span class="toc-badge">{aff_articles}</span></a></div>')
     
     # Build main content
     main_content = []
@@ -2922,7 +3103,7 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             
             <div style="margin-top: 15px;">
                 <h3 style="color: {primary}; font-size: 16px;">📑 Table of Contents</h3>
-                <div style="max-height: 300px; overflow-y: auto; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                <div style="max-height: 400px; overflow-y: auto; padding: 10px; background: #f8f9fa; border-radius: 8px;">
                     {''.join(toc_items)}
                 </div>
             </div>
@@ -2930,7 +3111,7 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
     </div>
     ''')
     
-    # Publications section
+    # Publications section with hierarchical expandable lists
     main_content.append(f'''
     <div id="publications" class="section">
         <div class="section-header" onclick="toggleSection('publications_content')">
@@ -2944,22 +3125,38 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
         <div id="publications_content" class="section-content">
     ''')
     
-    # Country -> Affiliation hierarchy
+    # Country -> Affiliation hierarchy with expandable lists
+    country_counter = 0
     for country, affiliations in hierarchy.items():
         country_articles = sum(len(articles) for articles in affiliations.values())
         country_id = hashlib.md5(country.encode('utf-8')).hexdigest()[:8]
+        country_counter += 1
+        is_first_country = (country_counter == 1)
         
         main_content.append(f'''
-        <div id="country_{country_id}" style="margin-bottom: 20px;">
-            <h3 style="color: {primary}; font-size: 18px; margin-bottom: 8px;">🌍 {escape_html(country)} <span class="section-badge">{country_articles} articles</span></h3>
+        <div id="country_{country_id}" class="country-section">
+            <div class="country-header" onclick="toggleCountry('{country_id}')">
+                <span class="toggle-icon" id="country_icon_{country_id}">{'▼' if is_first_country else '▶'}</span>
+                <span class="country-name">🌍 {escape_html(country)}</span>
+                <span class="badge">{country_articles} articles</span>
+            </div>
+            <div class="country-content" id="country_content_{country_id}" style="display: {'block' if is_first_country else 'none'};">
         ''')
         
+        affiliation_counter = 0
         for affiliation, articles in affiliations.items():
             aff_id = hashlib.md5(f"{country}_{affiliation}".encode('utf-8')).hexdigest()[:8]
+            affiliation_counter += 1
+            is_first_affiliation = (affiliation_counter == 1 and is_first_country)
             
             main_content.append(f'''
-            <div id="affiliation_{aff_id}" style="margin: 12px 0 12px 20px;">
-                <h4 style="color: {secondary}; font-size: 15px; margin-bottom: 6px;">🏛️ {escape_html(affiliation)} <span class="section-badge" style="background: {secondary};">{len(articles)} articles</span></h4>
+                <div id="affiliation_{aff_id}" class="affiliation-section">
+                    <div class="affiliation-header" onclick="toggleAffiliation('{aff_id}')">
+                        <span class="toggle-icon" id="affiliation_icon_{aff_id}">{'▼' if is_first_affiliation else '▶'}</span>
+                        <span class="affiliation-name">🏛️ {escape_html(affiliation)}</span>
+                        <span class="badge affiliation-badge">{len(articles)} articles</span>
+                    </div>
+                    <div class="affiliation-content" id="affiliation_content_{aff_id}" style="display: {'block' if is_first_affiliation else 'none'};">
             ''')
             
             for idx, article in enumerate(articles, 1):
@@ -2995,31 +3192,37 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
                 meta_str = ', '.join(meta_parts) if meta_parts else ''
                 
                 main_content.append(f'''
-                <div class="article-item" style="margin: 8px 0 8px 20px; padding: 10px 14px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
-                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                        <span style="font-weight: 600; color: {primary};">{idx}.</span>
-                        <span style="font-weight: 500;">{title}</span>
-                        <span style="color: {type_color}; font-size: 0.85rem; background: {type_color}20; padding: 0 8px; border-radius: 10px;">{type_icon} {type_label}</span>
-                    </div>
-                    <div style="font-size: 0.9rem; color: #555; margin-top: 4px;">
-                        <strong>Authors:</strong> {authors}
-                    </div>
-                    {f'<div style="font-size: 0.85rem; color: #666;"><strong>Affiliations:</strong> {affiliations_str}</div>' if affiliations_str and affiliations_str != 'No affiliations specified' else ''}
-                    {f'<div style="font-size: 0.85rem; color: #666;"><strong>Journal:</strong> {escape_html(journal_name_article)}</div>' if journal_name_article else ''}
-                    {f'<div style="font-size: 0.85rem; color: #666;">{meta_str}</div>' if meta_str else ''}
-                    <div style="font-size: 0.85rem; color: #666; display: flex; flex-wrap: wrap; gap: 12px;">
-                        <span><strong>Citations:</strong> {citations}</span>
-                        <span><strong>Per year:</strong> {citations_per_year:.1f}</span>
-                        <span><strong>References:</strong> {references}</span>
-                        <span><strong>OA:</strong> {oa_status}</span>
-                    </div>
-                    {f'<div style="font-size: 0.8rem; margin-top: 2px;"><a href="{doi_url}" target="_blank" style="color: #2980B9; text-decoration: none;">{doi_url}</a></div>' if doi_url else ''}
-                </div>
+                        <div class="article-item" style="margin: 6px 0; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
+                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                                <span style="font-weight: 600; color: {primary}; font-size: 13px;">{idx}.</span>
+                                <span style="font-weight: 500; font-size: 14px;">{title}</span>
+                                <span style="color: {type_color}; font-size: 0.8rem; background: {type_color}20; padding: 0 8px; border-radius: 10px;">{type_icon} {type_label}</span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: #555; margin-top: 3px;">
+                                <strong>Authors:</strong> {authors}
+                            </div>
+                            {f'<div style="font-size: 0.8rem; color: #666;"><strong>Affiliations:</strong> {affiliations_str}</div>' if affiliations_str and affiliations_str != 'No affiliations specified' else ''}
+                            {f'<div style="font-size: 0.8rem; color: #666;"><strong>Journal:</strong> {escape_html(journal_name_article)}</div>' if journal_name_article else ''}
+                            {f'<div style="font-size: 0.8rem; color: #666;">{meta_str}</div>' if meta_str else ''}
+                            <div style="font-size: 0.8rem; color: #666; display: flex; flex-wrap: wrap; gap: 10px; margin-top: 2px;">
+                                <span><strong>Citations:</strong> {citations}</span>
+                                <span><strong>Per year:</strong> {citations_per_year:.1f}</span>
+                                <span><strong>References:</strong> {references}</span>
+                                <span><strong>OA:</strong> {oa_status}</span>
+                            </div>
+                            {f'<div style="font-size: 0.75rem; margin-top: 2px;"><a href="{doi_url}" target="_blank" style="color: #2980B9; text-decoration: none;">{doi_url}</a></div>' if doi_url else ''}
+                        </div>
                 ''')
             
-            main_content.append('</div>')
+            main_content.append('''
+                    </div>
+                </div>
+            ''')
         
-        main_content.append('</div>')
+        main_content.append('''
+            </div>
+        </div>
+        ''')
     
     main_content.append('</div></div>')
     
@@ -3060,7 +3263,7 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             position: fixed;
             left: 0;
             top: 0;
-            width: 260px;
+            width: 280px;
             height: 100vh;
             background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
             color: white;
@@ -3087,9 +3290,9 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             text-decoration: none;
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 6px 12px;
-            margin: 2px 0;
+            gap: 8px;
+            padding: 4px 10px;
+            margin: 1px 0;
             border-radius: 6px;
             transition: all 0.3s;
             font-size: 12px;
@@ -3103,9 +3306,17 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             width: 22px;
             text-align: center;
         }}
+        .sidebar .sidebar-footer {{
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.2);
+            font-size: 10px;
+            opacity: 0.7;
+            line-height: 1.5;
+        }}
         
         .main-content {{
-            margin-left: 260px;
+            margin-left: 280px;
             padding: 25px 35px;
         }}
         
@@ -3245,14 +3456,6 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             letter-spacing: 0.3px;
         }}
         
-        .article-item {{
-            transition: all 0.2s;
-        }}
-        .article-item:hover {{
-            background: #e9ecef !important;
-            transform: translateX(3px);
-        }}
-        
         .toc-item {{
             padding: 3px 0;
             font-size: 13px;
@@ -3266,10 +3469,23 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             color: {primary};
             text-decoration: underline;
         }}
-        .toc-item.toc-sub {{
-            padding-left: 20px;
+        .toc-item.toc-country {{
+            font-weight: 600;
+            color: {primary};
+        }}
+        .toc-item.toc-affiliation {{
+            padding-left: 24px;
             font-size: 12px;
             color: #555;
+        }}
+        .toc-badge {{
+            display: inline-block;
+            background: #667eea20;
+            padding: 0 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            color: {primary};
         }}
         
         .color-scale-value {{
@@ -3285,6 +3501,102 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
         .color-scale-value:hover {{
             transform: scale(1.05);
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+        
+        .country-section {{
+            margin: 12px 0 16px 0;
+            border-left: 4px solid {primary};
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+        .country-header {{
+            padding: 10px 16px;
+            background: linear-gradient(135deg, {primary}10, {secondary}10);
+            cursor: pointer;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.3s;
+            font-weight: 600;
+            font-size: 16px;
+            user-select: none;
+        }}
+        .country-header:hover {{
+            background: linear-gradient(135deg, {primary}20, {secondary}20);
+        }}
+        .country-name {{
+            flex: 1;
+            color: #2C3E50;
+        }}
+        .badge {{
+            display: inline-block;
+            background: linear-gradient(135deg, {primary}, {secondary});
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+        }}
+        .country-content {{
+            padding: 8px 0 8px 16px;
+            background: #fafbfc;
+        }}
+        
+        .affiliation-section {{
+            margin: 8px 0 8px 8px;
+            border-left: 3px solid {secondary};
+            border-radius: 4px;
+            overflow: hidden;
+        }}
+        .affiliation-header {{
+            padding: 6px 14px;
+            background: #f0f1f3;
+            cursor: pointer;
+            border-radius: 4px 4px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s;
+            font-weight: 500;
+            font-size: 14px;
+            user-select: none;
+        }}
+        .affiliation-header:hover {{
+            background: #e5e7eb;
+        }}
+        .affiliation-name {{
+            flex: 1;
+            color: #2C3E50;
+        }}
+        .affiliation-badge {{
+            background: linear-gradient(135deg, {secondary}, {primary});
+            font-size: 10px;
+            padding: 1px 10px;
+        }}
+        .affiliation-content {{
+            padding: 6px 0 6px 16px;
+            background: #f8f9fa;
+        }}
+        
+        .toggle-icon {{
+            display: inline-block;
+            transition: transform 0.3s ease;
+            font-size: 14px;
+            color: {primary};
+            font-weight: 300;
+        }}
+        .toggle-icon.expanded {{
+            transform: rotate(90deg);
+        }}
+        
+        .article-item {{
+            transition: all 0.2s;
+            margin: 4px 0;
+        }}
+        .article-item:hover {{
+            background: #e9ecef !important;
+            transform: translateX(3px);
         }}
         
         .footer {{
@@ -3307,6 +3619,8 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             .header {{ padding: 15px 20px; }}
             .header h1 {{ font-size: 20px; }}
             .metrics-grid {{ grid-template-columns: repeat(2, 1fr); }}
+            .country-content {{ padding-left: 8px; }}
+            .affiliation-content {{ padding-left: 8px; }}
         }}
         
         @keyframes fadeInUp {{
@@ -3324,7 +3638,7 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
     <div class="sidebar">
         <h3>{escape_html(journal_abbr)}</h3>
         {''.join(nav_items)}
-        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 10px; opacity: 0.7; line-height: 1.5;">
+        <div class="sidebar-footer">
             <div>Period: {format_year_filter_for_filename(years)}</div>
             <div>Total: {total_articles} articles</div>
             <div style="margin-top: 3px; font-size: 9px; opacity: 0.6;">Generated: {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>
@@ -3344,6 +3658,49 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
     </div>
     
     <script>
+        // Toggle country section
+        function toggleCountry(countryId) {{
+            var content = document.getElementById('country_content_' + countryId);
+            var icon = document.getElementById('country_icon_' + countryId);
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (icon) {{
+                        icon.textContent = '▼';
+                        icon.classList.add('expanded');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (icon) {{
+                        icon.textContent = '▶';
+                        icon.classList.remove('expanded');
+                    }}
+                }}
+            }}
+        }}
+        
+        // Toggle affiliation section
+        function toggleAffiliation(affiliationId) {{
+            var content = document.getElementById('affiliation_content_' + affiliationId);
+            var icon = document.getElementById('affiliation_icon_' + affiliationId);
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (icon) {{
+                        icon.textContent = '▼';
+                        icon.classList.add('expanded');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (icon) {{
+                        icon.textContent = '▶';
+                        icon.classList.remove('expanded');
+                    }}
+                }}
+            }}
+        }}
+        
+        // Toggle main section
         function toggleSection(sectionId) {{
             var content = document.getElementById(sectionId);
             var indicator = document.getElementById(sectionId.replace('_content', '_indicator'));
@@ -3364,6 +3721,7 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             }}
         }}
         
+        // Auto-close publications section by default
         document.addEventListener('DOMContentLoaded', function() {{
             var sections = ['publications_content'];
             sections.forEach(function(id) {{
