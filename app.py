@@ -3389,219 +3389,399 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
 
 
 # ============================================================================
-# STEP 6: ADVANCED SEARCH
+# UI STEPS
 # ============================================================================
 
-def step_advanced_search():
-    """Step 6: Advanced search and filtering of articles"""
+def step_data_input():
+    """Step 1: Input DOIs"""
     st.markdown("""
     <div class="step-card">
-        <h3 style="margin: 0; font-size: 1.3rem;">🔍 Step 6: Advanced Search</h3>
-        <p style="margin: 5px 0; font-size: 0.9rem;">Filter articles by title using advanced search syntax.</p>
+        <h3 style="margin: 0; font-size: 1.3rem;">📥 Step 1: Input Research DOIs</h3>
+        <p style="margin: 5px 0; font-size: 0.9rem;">Enter DOI identifiers to analyze topics and keywords.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    if 'all_works' not in st.session_state:
-        st.error("❌ No data available. Please go back to Step 5.")
+    doi_input = st.text_area(
+        "**DOI Input** (one per line or comma-separated):",
+        height=150,
+        placeholder="Examples:\n10.1038/nmat1849\nhttps://doi.org/10.1038/nmat1849",
+        help="Enter up to 300 DOI identifiers"
+    )
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
+            if doi_input:
+                dois = parse_doi_input(doi_input)
+                if dois:
+                    st.session_state.dois = dois
+                    st.session_state.current_step = 2
+                    if 'html_cache' in st.session_state:
+                        del st.session_state.html_cache
+                    if 'all_reports_generated' in st.session_state:
+                        del st.session_state.all_reports_generated
+                    if 'filtered_articles' in st.session_state:
+                        del st.session_state.filtered_articles
+                    if 'search_query' in st.session_state:
+                        del st.session_state.search_query
+                    st.rerun()
+                else:
+                    st.error("❌ No valid DOI identifiers found.")
+            else:
+                st.error("❌ Please enter at least one DOI")
+
+def step_analysis():
+    """Step 2: Analysis"""
+    st.markdown("""
+    <div class="step-card">
+        <h3 style="margin: 0; font-size: 1.3rem;">🔍 Step 2: Analysis in Progress</h3>
+        <p style="margin: 5px 0; font-size: 0.9rem;">Fetching data from OpenAlex...</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if 'dois' not in st.session_state:
+        st.error("❌ No data to analyze. Please go back to Step 1.")
         return
     
     # Back button
     col_back, col_main = st.columns([1, 5])
     with col_back:
-        if st.button("← Back to Reports", use_container_width=True):
-            st.session_state.current_step = 5
+        if st.button("← Back", use_container_width=True):
+            st.session_state.current_step = 1
             st.rerun()
     
-    all_articles = st.session_state.all_works
-    total_articles = len(all_articles)
+    dois = st.session_state.dois
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{len(dois)}</div>
+            <div class="metric-label">DOIs</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{len(dois)//10}s</div>
+            <div class="metric-label">Est. Time</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">8/sec</div>
+            <div class="metric-label">API Rate</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with st.spinner("Fetching data..."):
+        results, successful, failed = fetch_works_by_dois_sync(dois)
+    
+    works_data = []
+    topic_counter = Counter()
+    titles = []
+    
+    for result in results:
+        if result.get('success') and result.get('data'):
+            work = result['data']
+            enriched = enrich_work_data_full(work)
+            
+            if enriched.get('primary_topic'):
+                topic_counter[enriched['primary_topic']] += 1
+            
+            works_data.append(enriched)
+            titles.append(enriched.get('title', ''))
+    
+    keyword_counter = analyze_keywords_parallel(titles)
+    
+    st.session_state.works_data = works_data
+    st.session_state.topic_counter = topic_counter
+    st.session_state.keyword_counter = keyword_counter
+    st.session_state.successful = successful
+    st.session_state.failed = failed
     
     st.markdown(f"""
-    <div style="background: white; border-radius: 8px; padding: 12px; border: 1px solid #ced4da; margin-bottom: 15px;">
-        <strong>Total articles available:</strong> {total_articles}
-        <br><small style="color: #666;">Enter search query to filter articles by title</small>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="filter-section" style="background: rgba(255, 255, 255, 0.9); border-radius: 20px; padding: 20px; margin-bottom: 20px; border: 1px solid rgba(102, 126, 234, 0.2);">
-        <div class="filter-header" style="font-size: 1.1rem; font-weight: 600; color: #495057; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #667eea;">
-            🔍 Search Syntax
+    <div class="info-message" style="background: linear-gradient(135deg, #2196F315 0%, #0D47A115 100%); border-radius: 8px; padding: 12px; border-left: 3px solid #2196F3; font-size: 0.9rem; margin: 10px 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <strong>✅ Analysis Complete!</strong><br>
+                Successfully processed {successful} papers
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
     
-    st.markdown("""
-    <div style="font-size: 0.9rem; color: #666; margin-bottom: 10px;">
-        <strong>Supported syntax:</strong>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([1, 1])
-    
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown("""
-        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #667eea; margin-bottom: 8px;">
-            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">"high temperature"</code> — Exact phrase match
-        </div>
-        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #27ae60; margin-bottom: 8px;">
-            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">high temperature</code> — Both words must appear (AND logic)
-        </div>
-        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e67e22; margin-bottom: 8px;">
-            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">catal*</code> — Wildcard: matches catalysis, catalyst, catalytic, etc.
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{successful}</div>
+            <div class="metric-label">Successful</div>
         </div>
         """, unsafe_allow_html=True)
-    
     with col2:
-        st.markdown("""
-        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #8e44ad; margin-bottom: 8px;">
-            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">fuel cell</code> — Automatically matches "fuel cells" (plural support)
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{failed}</div>
+            <div class="metric-label">Failed</div>
         </div>
-        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e74c3c; margin-bottom: 8px;">
-            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">"high temperature" catalysis*</code> — Combined: exact phrase AND wildcard
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{len(topic_counter)}</div>
+            <div class="metric-label">Topics</div>
         </div>
         """, unsafe_allow_html=True)
     
-    # Search input
-    search_query = st.text_input(
-        "Enter search query:",
-        value=st.session_state.get('search_query', ''),
-        placeholder='Example: "high temperature" catalysis* OR "fuel cell" polymer',
-        help="Use quotes for exact phrases, * for wildcards"
-    )
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🎯 Continue to Topic Selection", type="primary", use_container_width=True):
+            st.session_state.current_step = 3
+            st.rerun()
+
+def step_topic_selection():
+    """Step 3: Topic Selection"""
+    st.markdown("""
+    <div class="step-card">
+        <h3 style="margin: 0; font-size: 1.3rem;">🎯 Step 3: Select Research Topic</h3>
+        <p style="margin: 5px 0; font-size: 0.9rem;">Choose a topic for deep analysis.</p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    col_search1, col_search2, col_search3 = st.columns([1, 1, 1])
+    if not st.session_state.works_data:
+        st.error("❌ No data available. Please start from Step 1.")
+        return
     
-    with col_search1:
-        if st.button("🔍 Search", type="primary", use_container_width=True):
-            if search_query and search_query.strip():
-                with st.spinner("Filtering articles..."):
-                    filtered = filter_articles_by_query(all_articles, search_query)
-                    st.session_state.filtered_articles = filtered
-                    st.session_state.search_query = search_query
-                    st.session_state.search_results_count = len(filtered)
-                    st.rerun()
-            else:
-                st.warning("⚠️ Please enter a search query.")
-    
-    with col_search2:
-        if st.button("🔄 Reset Filter", use_container_width=True):
+    # Back button
+    col_back, col_main = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.current_step = 2
+            # Clear any existing topic selection when going back
+            if 'selected_topic' in st.session_state:
+                del st.session_state.selected_topic
+            if 'selected_topic_id' in st.session_state:
+                del st.session_state.selected_topic_id
+            if 'selected_years' in st.session_state:
+                del st.session_state.selected_years
+            if 'all_works' in st.session_state:
+                del st.session_state.all_works
+            if 'enriched_count' in st.session_state:
+                del st.session_state.enriched_count
+            if 'html_cache' in st.session_state:
+                del st.session_state.html_cache
+            if 'all_reports_generated' in st.session_state:
+                del st.session_state.all_reports_generated
             if 'filtered_articles' in st.session_state:
                 del st.session_state.filtered_articles
             if 'search_query' in st.session_state:
                 del st.session_state.search_query
             if 'search_results_count' in st.session_state:
                 del st.session_state.search_results_count
+            if 'years_input' in st.session_state:
+                del st.session_state.years_input
             st.rerun()
     
-    with col_search3:
-        if st.button("📊 Generate Reports from Filtered", use_container_width=True, type="secondary"):
-            if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
-                st.session_state.current_step = 5
-                st.rerun()
-            else:
-                st.warning("⚠️ No filtered articles to generate reports from.")
+    topics = st.session_state.topic_counter.most_common()
     
-    # Show results
-    if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
-        filtered = st.session_state.filtered_articles
-        query = st.session_state.get('search_query', '')
-        
-        st.markdown("---")
-        st.markdown(f"### 📋 Search Results: {len(filtered)} articles found")
-        
-        if query:
-            st.markdown(f"**Query:** `{query}`")
-        
-        # Show preview of filtered articles
-        with st.expander(f"Show {len(filtered)} filtered articles", expanded=False):
-            for idx, article in enumerate(filtered[:50], 1):
-                title = article.get('title', 'No title')
-                year = article.get('publication_year', '')
-                journal = article.get('journal_name', '')
-                
-                # Get publication type info
-                type_label = article.get('type_label', 'Other')
-                type_icon = article.get('type_icon', '📎')
-                type_color = article.get('type_color', '#7f8c8d')
-                
-                st.markdown(f"""
-                <div class="result-card" style="padding: 10px; margin-bottom: 6px;">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="font-weight: 600; color: #667eea;">{idx}.</span>
-                        <span style="font-weight: 500;">{title}</span>
-                        <span style="color: {type_color}; font-size: 0.85rem;">{type_icon} {type_label}</span>
-                    </div>
-                    <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
-                        {f'Year: {year} ' if year else ''}
-                        {f'| Journal: {journal}' if journal else ''}
-                    </div>
+    cols = st.columns(2)
+    for idx, (topic, count) in enumerate(topics[:10]):
+        with cols[idx % 2]:
+            is_selected = st.session_state.get('selected_topic') == topic
+            st.markdown(f"""
+            <div class="topic-card" style="background: white; border-radius: 8px; padding: 12px; margin-bottom: 8px; border: 1px solid {'#667eea' if is_selected else '#e0e0e0'}; cursor: pointer; transition: all 0.2s ease;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="font-weight: 600; font-size: 0.9rem;">{topic[:70]}{'...' if len(topic) > 70 else ''}</div>
+                    <span style="background: #667eea; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem;">
+                        {count} papers
+                    </span>
                 </div>
-                """, unsafe_allow_html=True)
+            </div>
+            """, unsafe_allow_html=True)
             
-            if len(filtered) > 50:
-                st.info(f"Showing first 50 of {len(filtered)} articles")
-        
-        # Show statistics
-        st.markdown("---")
-        st.markdown("### 📊 Filtered Statistics")
-        
-        filtered_years = [a.get('publication_year', 0) for a in filtered if a.get('publication_year', 0) > 0]
-        filtered_citations = sum(a.get('cited_by_count', 0) for a in filtered)
-        filtered_avg_citations = filtered_citations / len(filtered) if filtered else 0
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{len(filtered)}</div>
-                <div class="metric-label">Filtered Articles</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with col2:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{filtered_citations}</div>
-                <div class="metric-label">Total Citations</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with col3:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{filtered_avg_citations:.1f}</div>
-                <div class="metric-label">Avg Citations/Article</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        # Generate reports button
-        col_go1, col_go2, col_go3 = st.columns([1, 2, 1])
-        with col_go2:
-            if st.button("📊 Generate Reports from Filtered Articles", type="primary", use_container_width=True):
-                st.session_state.current_step = 5
+            if st.button(f"Select", key=f"select_{idx}", 
+                        use_container_width=True,
+                        type="primary" if is_selected else "secondary"):
+                # Clear previous topic data when selecting new topic
+                if 'selected_topic' in st.session_state and st.session_state.selected_topic != topic:
+                    if 'selected_topic_id' in st.session_state:
+                        del st.session_state.selected_topic_id
+                    if 'selected_years' in st.session_state:
+                        del st.session_state.selected_years
+                    if 'all_works' in st.session_state:
+                        del st.session_state.all_works
+                    if 'enriched_count' in st.session_state:
+                        del st.session_state.enriched_count
+                    if 'html_cache' in st.session_state:
+                        del st.session_state.html_cache
+                    if 'all_reports_generated' in st.session_state:
+                        del st.session_state.all_reports_generated
+                    if 'filtered_articles' in st.session_state:
+                        del st.session_state.filtered_articles
+                    if 'search_query' in st.session_state:
+                        del st.session_state.search_query
+                    if 'search_results_count' in st.session_state:
+                        del st.session_state.search_results_count
+                    if 'years_input' in st.session_state:
+                        del st.session_state.years_input
+                
+                st.session_state.selected_topic = topic
+                
+                for work in st.session_state.works_data:
+                    if work.get('primary_topic') == topic:
+                        topic_id = work.get('topic_id')
+                        if topic_id:
+                            st.session_state.selected_topic_id = topic_id
+                            break
+                
                 st.rerun()
     
-    elif 'filtered_articles' in st.session_state and not st.session_state.filtered_articles:
-        st.warning("⚠️ No articles match your search query. Try a different query or reset the filter.")
+    if 'selected_topic' in st.session_state and 'selected_topic_id' in st.session_state:
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("⏰ Select Years", type="primary", use_container_width=True):
+                st.session_state.current_step = 4
+                st.rerun()
+
+def step_year_selection():
+    """Step 4: Select publication years - free text input"""
+    st.markdown("""
+    <div class="step-card">
+        <h3 style="margin: 0; font-size: 1.3rem;">⏰ Step 4: Select Publication Years</h3>
+        <p style="margin: 5px 0; font-size: 0.9rem;">Enter the publication years for analysis (any format supported).</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if 'selected_topic_id' not in st.session_state:
+        st.error("❌ Topic not selected. Please go back to Step 3.")
+        return
+    
+    # Back button
+    col_back, col_main = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.current_step = 3
+            # Keep selected topic but clear years and dependent data
+            if 'selected_years' in st.session_state:
+                del st.session_state.selected_years
+            if 'all_works' in st.session_state:
+                del st.session_state.all_works
+            if 'enriched_count' in st.session_state:
+                del st.session_state.enriched_count
+            if 'html_cache' in st.session_state:
+                del st.session_state.html_cache
+            if 'all_reports_generated' in st.session_state:
+                del st.session_state.all_reports_generated
+            if 'filtered_articles' in st.session_state:
+                del st.session_state.filtered_articles
+            if 'search_query' in st.session_state:
+                del st.session_state.search_query
+            if 'search_results_count' in st.session_state:
+                del st.session_state.search_results_count
+            if 'years_input' in st.session_state:
+                del st.session_state.years_input
+            st.rerun()
+    
+    topic_id = st.session_state.selected_topic_id
+    topic_name = st.session_state.get('selected_topic', 'Selected Topic')
+    
+    st.markdown(f"""
+    <div style="background: white; border-radius: 8px; padding: 12px; border: 1px solid #ced4da; margin-bottom: 15px;">
+        <strong>Selected Topic:</strong> {topic_name}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="filter-section" style="background: rgba(255, 255, 255, 0.9); border-radius: 20px; padding: 20px; margin-bottom: 20px; border: 1px solid rgba(102, 126, 234, 0.2);">
+        <div class="filter-header" style="font-size: 1.1rem; font-weight: 600; color: #495057; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #667eea;">
+            📅 Publication Years
+        </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div style="font-size: 0.9rem; color: #666; margin-bottom: 10px;">
+        <strong>Supported formats:</strong>
+    </div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2000</span>
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2010</span>
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2010-2020</span>
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2020</span>
+        <span style="background: #e3f2fd; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem;">2023-2026</span>
+        <span style="background: #fff3e0; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem; border: 1px dashed #ff9800;">2005,2010-2015,2020</span>
+        <span style="background: #fff3e0; padding: 4px 12px; border-radius: 16px; font-size: 0.8rem; border: 1px dashed #ff9800;">2015,2018-2020,2022-2024</span>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    years_input = st.text_input(
+        "Enter publication years",
+        value=st.session_state.get('years_input', ''),
+        placeholder="Example: 2000 or 2010 or 2010-2020 or 2020 or 2023-2026 or 2015,2018-2020,2022",
+        help="Enter years in any format: single year (2020), range (2010-2020), or combination (2015,2018-2020,2022)"
+    )
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    if years_input:
+        years = parse_year_filter(years_input)
+        if years:
+            years_str = format_year_filter_for_filename(years)
+            st.markdown(f"""
+            <div style="background: #e8f5e9; border-radius: 8px; padding: 12px; border-left: 4px solid #4CAF50; margin: 10px 0;">
+                <strong>✅ Selected years:</strong> {', '.join(map(str, years))}
+                <br><span style="font-size: 0.85rem; color: #666;">Total: {len(years)} years</span>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style="background: #ffebee; border-radius: 8px; padding: 12px; border-left: 4px solid #f44336; margin: 10px 0;">
+                <strong>❌ Invalid format:</strong> Please check your input.
+                <br><span style="font-size: 0.85rem; color: #666;">Example: 2000, 2010-2020, 2015,2018-2020,2022</span>
+            </div>
+            """, unsafe_allow_html=True)
     
     st.markdown("---")
     
-    # New analysis button
-    if st.button("🔄 New Analysis", use_container_width=True):
-        keys_to_clear = ['current_step', 'dois', 'works_data', 'topic_counter', 
-                        'keyword_counter', 'successful', 'failed', 'selected_topic',
-                        'selected_topic_id', 'selected_years', 'all_works', 
-                        'enriched_count', 'years_input', 'pdf_cache', 'all_reports_generated',
-                        'filtered_articles', 'search_query', 'search_results_count']
-        for key in keys_to_clear:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.session_state.current_step = 1
-        st.rerun()
-
-# ============================================================================
-# STEP 5: RESULTS (UPDATED WITH HTML REPORTS)
-# ============================================================================
+    # Remove the Reset Cached Data button as per requirement
+    
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("📊 Generate Reports", type="primary", use_container_width=True):
+            if not years_input:
+                st.error("❌ Please enter at least one year.")
+                return
+            
+            years = parse_year_filter(years_input)
+            if not years:
+                st.error("❌ Invalid year format. Please check your input.")
+                return
+            
+            # Clear cached data when years change
+            if 'selected_years' in st.session_state and st.session_state.selected_years != years:
+                if 'all_works' in st.session_state:
+                    del st.session_state.all_works
+                if 'enriched_count' in st.session_state:
+                    del st.session_state.enriched_count
+                if 'html_cache' in st.session_state:
+                    del st.session_state.html_cache
+                if 'all_reports_generated' in st.session_state:
+                    del st.session_state.all_reports_generated
+                if 'filtered_articles' in st.session_state:
+                    del st.session_state.filtered_articles
+                if 'search_query' in st.session_state:
+                    del st.session_state.search_query
+                if 'search_results_count' in st.session_state:
+                    del st.session_state.search_results_count
+            
+            st.session_state.selected_years = years
+            st.session_state.years_input = years_input
+            st.session_state.current_step = 5
+            st.rerun()
 
 def step_results():
     """Step 5: Results with 3 HTML reports"""
@@ -3966,6 +4146,244 @@ def step_results():
         st.session_state.current_step = 1
         st.rerun()
 
+def generate_journal_abbreviation(journal_name: str) -> str:
+    if not journal_name:
+        return "JOURNAL"
+    
+    stop_words = {'of', 'the', 'and', 'for', 'in', 'on', 'at', 'to', 'by', 'with', 'from'}
+    words = re.findall(r'[A-Za-z]+', journal_name)
+    
+    abbreviation_parts = []
+    for word in words:
+        word_lower = word.lower()
+        if word_lower not in stop_words and len(word) > 2:
+            abbreviation_parts.append(word[0].upper())
+        elif len(abbreviation_parts) == 0 and len(words) <= 3:
+            abbreviation_parts.append(word[0].upper())
+    
+    if len(abbreviation_parts) < 3 and len(words) > 0:
+        for word in words:
+            if word.lower() not in stop_words:
+                abbreviation_parts = [word[:4].upper()]
+                break
+    
+    abbreviation = ''.join(abbreviation_parts)
+    
+    if not abbreviation and words:
+        abbreviation = words[0][:4].upper()
+    
+    return abbreviation if abbreviation else "JOURNAL"
+
+# ============================================================================
+# STEP 6: ADVANCED SEARCH
+# ============================================================================
+
+def step_advanced_search():
+    """Step 6: Advanced search and filtering of articles"""
+    st.markdown("""
+    <div class="step-card">
+        <h3 style="margin: 0; font-size: 1.3rem;">🔍 Step 6: Advanced Search</h3>
+        <p style="margin: 5px 0; font-size: 0.9rem;">Filter articles by title using advanced search syntax.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if 'all_works' not in st.session_state:
+        st.error("❌ No data available. Please go back to Step 5.")
+        return
+    
+    # Back button
+    col_back, col_main = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back to Reports", use_container_width=True):
+            st.session_state.current_step = 5
+            st.rerun()
+    
+    all_articles = st.session_state.all_works
+    total_articles = len(all_articles)
+    
+    st.markdown(f"""
+    <div style="background: white; border-radius: 8px; padding: 12px; border: 1px solid #ced4da; margin-bottom: 15px;">
+        <strong>Total articles available:</strong> {total_articles}
+        <br><small style="color: #666;">Enter search query to filter articles by title</small>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="filter-section" style="background: rgba(255, 255, 255, 0.9); border-radius: 20px; padding: 20px; margin-bottom: 20px; border: 1px solid rgba(102, 126, 234, 0.2);">
+        <div class="filter-header" style="font-size: 1.1rem; font-weight: 600; color: #495057; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #667eea;">
+            🔍 Search Syntax
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div style="font-size: 0.9rem; color: #666; margin-bottom: 10px;">
+        <strong>Supported syntax:</strong>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.markdown("""
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #667eea; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">"high temperature"</code> — Exact phrase match
+        </div>
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #27ae60; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">high temperature</code> — Both words must appear (AND logic)
+        </div>
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e67e22; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">catal*</code> — Wildcard: matches catalysis, catalyst, catalytic, etc.
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #8e44ad; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">fuel cell</code> — Automatically matches "fuel cells" (plural support)
+        </div>
+        <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #e74c3c; margin-bottom: 8px;">
+            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-family: monospace;">"high temperature" catalysis*</code> — Combined: exact phrase AND wildcard
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Search input
+    search_query = st.text_input(
+        "Enter search query:",
+        value=st.session_state.get('search_query', ''),
+        placeholder='Example: "high temperature" catalysis* OR "fuel cell" polymer',
+        help="Use quotes for exact phrases, * for wildcards"
+    )
+    
+    col_search1, col_search2, col_search3 = st.columns([1, 1, 1])
+    
+    with col_search1:
+        if st.button("🔍 Search", type="primary", use_container_width=True):
+            if search_query and search_query.strip():
+                with st.spinner("Filtering articles..."):
+                    filtered = filter_articles_by_query(all_articles, search_query)
+                    st.session_state.filtered_articles = filtered
+                    st.session_state.search_query = search_query
+                    st.session_state.search_results_count = len(filtered)
+                    st.rerun()
+            else:
+                st.warning("⚠️ Please enter a search query.")
+    
+    with col_search2:
+        if st.button("🔄 Reset Filter", use_container_width=True):
+            if 'filtered_articles' in st.session_state:
+                del st.session_state.filtered_articles
+            if 'search_query' in st.session_state:
+                del st.session_state.search_query
+            if 'search_results_count' in st.session_state:
+                del st.session_state.search_results_count
+            st.rerun()
+    
+    with col_search3:
+        if st.button("📊 Generate Reports from Filtered", use_container_width=True, type="secondary"):
+            if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
+                st.session_state.current_step = 5
+                st.rerun()
+            else:
+                st.warning("⚠️ No filtered articles to generate reports from.")
+    
+    # Show results
+    if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
+        filtered = st.session_state.filtered_articles
+        query = st.session_state.get('search_query', '')
+        
+        st.markdown("---")
+        st.markdown(f"### 📋 Search Results: {len(filtered)} articles found")
+        
+        if query:
+            st.markdown(f"**Query:** `{query}`")
+        
+        # Show preview of filtered articles
+        with st.expander(f"Show {len(filtered)} filtered articles", expanded=False):
+            for idx, article in enumerate(filtered[:50], 1):
+                title = article.get('title', 'No title')
+                year = article.get('publication_year', '')
+                journal = article.get('journal_name', '')
+                
+                # Get publication type info
+                type_label = article.get('type_label', 'Other')
+                type_icon = article.get('type_icon', '📎')
+                type_color = article.get('type_color', '#7f8c8d')
+                
+                st.markdown(f"""
+                <div class="result-card" style="padding: 10px; margin-bottom: 6px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-weight: 600; color: #667eea;">{idx}.</span>
+                        <span style="font-weight: 500;">{title}</span>
+                        <span style="color: {type_color}; font-size: 0.85rem;">{type_icon} {type_label}</span>
+                    </div>
+                    <div style="font-size: 0.85rem; color: #666; margin-top: 4px;">
+                        {f'Year: {year} ' if year else ''}
+                        {f'| Journal: {journal}' if journal else ''}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            if len(filtered) > 50:
+                st.info(f"Showing first 50 of {len(filtered)} articles")
+        
+        # Show statistics
+        st.markdown("---")
+        st.markdown("### 📊 Filtered Statistics")
+        
+        filtered_years = [a.get('publication_year', 0) for a in filtered if a.get('publication_year', 0) > 0]
+        filtered_citations = sum(a.get('cited_by_count', 0) for a in filtered)
+        filtered_avg_citations = filtered_citations / len(filtered) if filtered else 0
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-value">{len(filtered)}</div>
+                <div class="metric-label">Filtered Articles</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col2:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-value">{filtered_citations}</div>
+                <div class="metric-label">Total Citations</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-value">{filtered_avg_citations:.1f}</div>
+                <div class="metric-label">Avg Citations/Article</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Generate reports button
+        col_go1, col_go2, col_go3 = st.columns([1, 2, 1])
+        with col_go2:
+            if st.button("📊 Generate Reports from Filtered Articles", type="primary", use_container_width=True):
+                st.session_state.current_step = 5
+                st.rerun()
+    
+    elif 'filtered_articles' in st.session_state and not st.session_state.filtered_articles:
+        st.warning("⚠️ No articles match your search query. Try a different query or reset the filter.")
+    
+    st.markdown("---")
+    
+    # New analysis button
+    if st.button("🔄 New Analysis", use_container_width=True):
+        keys_to_clear = ['current_step', 'dois', 'works_data', 'topic_counter', 
+                        'keyword_counter', 'successful', 'failed', 'selected_topic',
+                        'selected_topic_id', 'selected_years', 'all_works', 
+                        'enriched_count', 'years_input', 'html_cache', 'all_reports_generated',
+                        'filtered_articles', 'search_query', 'search_results_count']
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.session_state.current_step = 1
+        st.rerun()
 
 # ============================================================================
 # STOPWORDS
