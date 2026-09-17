@@ -1098,6 +1098,72 @@ def extract_country_from_work(work: dict) -> str:
                         return country_name
     return 'Unknown'
 
+def extract_funders_and_awards(work: dict) -> Tuple[List[dict], List[dict], List[Tuple[str, str]]]:
+    """
+    Extract funders and awards from work data.
+    Returns:
+        funders: List of {id, display_name, ror}
+        awards: List of {id, funder_award_id, funder_id, funder_display_name}
+        pairs:  List of (funder_display_name, funder_award_id) unique pairs
+    """
+    funders_raw = work.get('funders', []) or []
+    awards_raw = work.get('awards', []) or []
+    
+    funders = []
+    funder_by_id = {}
+    for f in funders_raw:
+        if not f:
+            continue
+        f_id = f.get('id', '') or ''
+        f_name = (f.get('display_name') or '').strip()
+        f_ror = f.get('ror', '') or ''
+        if not f_id and not f_name:
+            continue
+        funder_entry = {
+            'id': f_id,
+            'display_name': f_name if f_name else 'Unknown Funder',
+            'ror': f_ror,
+        }
+        funders.append(funder_entry)
+        if f_id:
+            funder_by_id[f_id] = funder_entry['display_name']
+    
+    awards = []
+    for a in awards_raw:
+        if not a:
+            continue
+        a_id = a.get('id', '') or ''
+        a_award_id = (a.get('funder_award_id') or '').strip()
+        a_funder_id = a.get('funder_id', '') or ''
+        a_funder_name = (a.get('funder_display_name') or '').strip()
+        if not a_funder_name and a_funder_id:
+            a_funder_name = funder_by_id.get(a_funder_id, '')
+        if not a_funder_name:
+            a_funder_name = 'Unknown Funder'
+        if not a_award_id:
+            a_award_id = 'Unspecified Award'
+        awards.append({
+            'id': a_id,
+            'funder_award_id': a_award_id,
+            'funder_id': a_funder_id,
+            'funder_display_name': a_funder_name,
+        })
+    
+    # Build unique (funder, award) pairs
+    pairs_set = set()
+    for a in awards:
+        pairs_set.add((a['funder_display_name'], a['funder_award_id']))
+    # Also include funders without awards
+    for f in funders:
+        fname = f['display_name']
+        has_award = any(a['funder_display_name'] == fname for a in awards)
+        if not has_award:
+            pairs_set.add((fname, 'Unspecified Award'))
+    
+    pairs = sorted(pairs_set)
+    
+    return funders, awards, pairs
+
 def get_oa_status(work: dict) -> str:
     """
     Get Open Access status.
@@ -1228,6 +1294,13 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
     # Get publication type info
     type_label, type_color, type_icon = get_publication_type_info(work)
     
+    # Extract funders and awards (NEW)
+    funders, awards, funder_award_pairs = extract_funders_and_awards(work)
+    funder_names = [f['display_name'] for f in funders] if funders else []
+    award_ids = [a['funder_award_id'] for a in awards] if awards else []
+    funder_names_str = ' / '.join(funder_names) if funder_names else 'No funding information'
+    award_ids_str = ' / '.join(award_ids) if award_ids else 'No award information'
+    
     enriched = {
         'doi': doi_clean,
         'doi_url': f"https://doi.org/{doi_clean}" if doi_clean else '',
@@ -1254,7 +1327,15 @@ def enrich_work_data_full(work: dict, current_year: int = None) -> dict:
         'type_label': type_label,
         'type_color': type_color,
         'type_icon': type_icon,
-        'country': extract_country_from_work(work)
+        'country': extract_country_from_work(work),
+        # NEW funder/award fields
+        'funders': funders,
+        'awards': awards,
+        'funder_award_pairs': funder_award_pairs,
+        'funder_names': funder_names,
+        'award_ids': award_ids,
+        'funder_names_str': funder_names_str,
+        'award_ids_str': award_ids_str,
     }
     
     return enriched
@@ -1278,6 +1359,14 @@ def cached_group_articles_by_country_affiliation(articles_tuple: tuple, sort_opt
     """
     articles = list(articles_tuple)
     return group_articles_by_country_affiliation(articles, sort_option)
+
+@st.cache_data(ttl=3600)
+def cached_group_articles_by_funder_award(articles_tuple: tuple, sort_funder: str = 'alphabetical', sort_award: str = 'alphabetical') -> Dict[str, Dict[str, List[dict]]]:
+    """
+    Cached version of group_articles_by_funder_award.
+    """
+    articles = list(articles_tuple)
+    return group_articles_by_funder_award(articles, sort_funder, sort_award)
 
 @st.cache_data(ttl=3600)
 def cached_sort_articles_by_citations(articles_tuple: tuple, sort_by: str = 'citations_per_year') -> List[dict]:
@@ -1403,6 +1492,77 @@ def group_articles_by_country_affiliation(articles: List[dict], sort_option: str
                 reverse=True
             )
             sorted_hierarchy[country][affiliation] = sorted_articles
+    
+    return sorted_hierarchy
+
+def group_articles_by_funder_award(articles: List[dict], sort_funder: str = 'alphabetical', sort_award: str = 'alphabetical') -> Dict[str, Dict[str, List[dict]]]:
+    """
+    Group articles by Funder -> Award ID.
+    An article can appear under multiple (funder, award) pairs.
+    Articles without funding info go to 'No funding information'.
+    Sorted according to sort_funder / sort_award: 'alphabetical' or 'by_count'.
+    """
+    hierarchy = defaultdict(lambda: defaultdict(list))
+    
+    NO_FUNDER = 'No funding information'
+    NO_AWARD = 'No award information'
+    
+    for article in articles:
+        pairs = article.get('funder_award_pairs', []) or []
+        if not pairs:
+            # Article has no funders at all
+            hierarchy[NO_FUNDER][NO_AWARD].append(article)
+            continue
+        
+        seen_in_article = set()
+        for (funder_name, award_id) in pairs:
+            fname = funder_name if funder_name else NO_FUNDER
+            aid = award_id if award_id else NO_AWARD
+            key = (fname, aid)
+            if key in seen_in_article:
+                continue
+            seen_in_article.add(key)
+            hierarchy[fname][aid].append(article)
+    
+    # Sort top-level funders
+    if sort_funder == 'by_count':
+        funder_items = []
+        for funder in hierarchy.keys():
+            if funder is not None:
+                total_count = sum(len(arts) for arts in hierarchy[funder].values())
+                funder_items.append((funder, total_count))
+        # Always keep 'No funding information' last
+        funder_items.sort(key=lambda x: (x[0] == NO_FUNDER, -x[1]))
+        sorted_funders = [item[0] for item in funder_items]
+    else:  # alphabetical
+        sorted_funders = sorted(
+            [f for f in hierarchy.keys() if f is not None],
+            key=lambda x: (x == NO_FUNDER, x.lower())
+        )
+    
+    sorted_hierarchy = {}
+    for funder in sorted_funders:
+        if sort_award == 'by_count':
+            award_items = []
+            for award in hierarchy[funder].keys():
+                if award is not None:
+                    award_items.append((award, len(hierarchy[funder][award])))
+            award_items.sort(key=lambda x: (x[0] == NO_AWARD, -x[1]))
+            sorted_awards = [item[0] for item in award_items]
+        else:  # alphabetical
+            sorted_awards = sorted(
+                [a for a in hierarchy[funder].keys() if a is not None],
+                key=lambda x: (x == NO_AWARD, x.lower())
+            )
+        
+        sorted_hierarchy[funder] = {}
+        for award in sorted_awards:
+            sorted_articles = sorted(
+                hierarchy[funder][award],
+                key=lambda x: x.get('citations_per_year', 0) if x.get('citations_per_year') is not None else 0,
+                reverse=True
+            )
+            sorted_hierarchy[funder][award] = sorted_articles
     
     return sorted_hierarchy
 
@@ -1699,7 +1859,7 @@ def parse_complex_search_query(query: str) -> Dict[str, Any]:
     pass
 
 # ============================================================================
-# HTML REPORT GENERATION FUNCTIONS (NEW - REPLACES PDF)
+# HTML REPORT GENERATION FUNCTIONS
 # ============================================================================
 
 def escape_html(text: str) -> str:
@@ -1730,6 +1890,129 @@ def get_color_scale_html(value: float, max_val: float, min_val: float = 0, unit:
         value_str = str(int(value)) if value == int(value) else f"{value:.1f}"
     
     return f'<span class="color-scale-value" style="background: {bg_color}; color: {text_color};">{value_str}{unit}</span>'
+
+
+# ============================================================================
+# JS FILTER HELPERS (client-side filters embedded in HTML reports)
+# ============================================================================
+
+def _js_filter_common_styles() -> str:
+    """Common CSS for JS filter widgets."""
+    return """
+        .js-filter-panel {
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin: 12px 0 16px 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: flex-end;
+        }
+        .js-filter-field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex: 1 1 220px;
+            min-width: 180px;
+        }
+        .js-filter-field label {
+            font-size: 11px;
+            font-weight: 600;
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .js-filter-field input {
+            padding: 6px 10px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: inherit;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            background: #fff;
+        }
+        .js-filter-field input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+        }
+        .js-filter-reset {
+            padding: 6px 14px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            height: 32px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .js-filter-reset:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+        .js-filter-counter {
+            font-size: 12px;
+            color: #555;
+            padding: 6px 10px;
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            align-self: flex-end;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            font-weight: 600;
+        }
+        .js-filter-no-results {
+            padding: 16px;
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            color: #856404;
+            font-size: 14px;
+            margin: 12px 0;
+            display: none;
+        }
+    """
+
+
+def _js_filter_common_script() -> str:
+    """Common JS for report filtering."""
+    return """
+        function normalizeStr(s) {
+            return (s || '').toString().toLowerCase().trim();
+        }
+        
+        function updateCounter(visibleArticles, totalArticles) {
+            var counters = document.querySelectorAll('.js-filter-counter');
+            counters.forEach(function(c) {
+                c.textContent = 'Showing ' + visibleArticles + ' of ' + totalArticles;
+            });
+        }
+        
+        function resetAllFilters() {
+            document.querySelectorAll('.js-filter-input').forEach(function(inp) {
+                inp.value = '';
+            });
+        }
+        
+        function showNoResultsIfNeeded(visibleArticles, containerId) {
+            var container = document.getElementById(containerId);
+            if (!container) return;
+            var noRes = container.querySelector('.js-filter-no-results');
+            if (!noRes) return;
+            if (visibleArticles === 0) {
+                noRes.style.display = 'block';
+            } else {
+                noRes.style.display = 'none';
+            }
+        }
+    """
+
 
 def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, years: List[int],
                                        hierarchy: Dict, report_title: str = "Report by Publisher & Journal",
@@ -1834,6 +2117,23 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
         </div>
         <div class="section-divider"></div>
         <div id="publications_content" class="section-content">
+            <div class="js-filter-panel">
+                <div class="js-filter-field">
+                    <label>Filter by journal name</label>
+                    <input type="text" class="js-filter-input" id="pj-filter-journal"
+                           placeholder="e.g. chemistry"
+                           oninput="applyPublisherJournalFilters()">
+                </div>
+                <div class="js-filter-field">
+                    <label>Filter by article title</label>
+                    <input type="text" class="js-filter-input" id="pj-filter-title"
+                           placeholder="substring in title"
+                           oninput="applyPublisherJournalFilters()">
+                </div>
+                <button class="js-filter-reset" onclick="resetPublisherJournalFilters()">Reset</button>
+                <div class="js-filter-counter">Showing {total_articles} of {total_articles}</div>
+            </div>
+            <div class="js-filter-no-results">No matching publications. Try adjusting the filters.</div>
     ''')
     
     # Publisher -> Journal hierarchy with expandable lists
@@ -1845,7 +2145,8 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
         is_first_publisher = (publisher_counter == 1)
         
         main_content.append(f'''
-        <div id="publisher_{publisher_id}" class="publisher-section">
+        <div id="publisher_{publisher_id}" class="publisher-section"
+             data-publisher-name="{escape_html(publisher.lower())}">
             <div class="publisher-header" onclick="togglePublisher('{publisher_id}')">
                 <span class="toggle-icon" id="publisher_icon_{publisher_id}">{'▼' if is_first_publisher else '▶'}</span>
                 <span class="publisher-name">📖 {escape_html(publisher)}</span>
@@ -1861,7 +2162,8 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             is_first_journal = (journal_counter == 1 and is_first_publisher)
             
             main_content.append(f'''
-                <div id="journal_{journal_id}" class="journal-section">
+                <div id="journal_{journal_id}" class="journal-section"
+                     data-journal-name="{escape_html(journal.lower())}">
                     <div class="journal-header" onclick="toggleJournal('{journal_id}')">
                         <span class="toggle-icon" id="journal_icon_{journal_id}">{'▼' if is_first_journal else '▶'}</span>
                         <span class="journal-name">📄 {escape_html(journal)}</span>
@@ -1887,6 +2189,7 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
                 type_icon = article.get('type_icon', '📎')
                 type_color = article.get('type_color', '#7f8c8d')
                 doi_url = article.get('doi_url', '')
+                title_raw = article.get('title', 'No title')
                 
                 meta_parts = []
                 if year:
@@ -1902,7 +2205,8 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
                 meta_str = ', '.join(meta_parts) if meta_parts else ''
                 
                 main_content.append(f'''
-                        <div class="article-item" style="margin: 6px 0; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
+                        <div class="article-item" data-article-title="{escape_html(title_raw.lower())}"
+                             style="margin: 6px 0; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
                             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                                 <span style="font-weight: 600; color: {primary}; font-size: 13px;">{idx}.</span>
                                 <span style="font-weight: 500; font-size: 14px;">{title}</span>
@@ -2329,6 +2633,8 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
             font-size: 11px;
         }}
         
+        {_js_filter_common_styles()}
+        
         @media print {{
             .sidebar {{ display: none; }}
             .main-content {{ margin-left: 0; }}
@@ -2441,6 +2747,78 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
                     }}
                 }}
             }}
+        }}
+        
+        {_js_filter_common_script()}
+        
+        function resetPublisherJournalFilters() {{
+            var ji = document.getElementById('pj-filter-journal');
+            var ti = document.getElementById('pj-filter-title');
+            if (ji) ji.value = '';
+            if (ti) ti.value = '';
+            applyPublisherJournalFilters();
+        }}
+        
+        function applyPublisherJournalFilters() {{
+            var journalInput = document.getElementById('pj-filter-journal');
+            var titleInput = document.getElementById('pj-filter-title');
+            var journalQuery = normalizeStr(journalInput ? journalInput.value : '');
+            var titleQuery = normalizeStr(titleInput ? titleInput.value : '');
+            
+            var totalArticles = 0;
+            var visibleArticles = 0;
+            
+            document.querySelectorAll('.publisher-section').forEach(function(pubSec) {{
+                var pubVisibleJournals = 0;
+                pubSec.querySelectorAll('.journal-section').forEach(function(jSec) {{
+                    var journalName = normalizeStr(jSec.getAttribute('data-journal-name') || '');
+                    var journalMatch = !journalQuery || journalName.indexOf(journalQuery) !== -1;
+                    
+                    var visibleInJournal = 0;
+                    jSec.querySelectorAll('.article-item').forEach(function(art) {{
+                        totalArticles += 1;
+                        var artTitle = normalizeStr(art.getAttribute('data-article-title') || '');
+                        var titleMatch = !titleQuery || artTitle.indexOf(titleQuery) !== -1;
+                        var ok = journalMatch && titleMatch;
+                        if (ok) {{
+                            art.style.display = '';
+                            visibleInJournal += 1;
+                            visibleArticles += 1;
+                        }} else {{
+                            art.style.display = 'none';
+                        }}
+                    }});
+                    
+                    if (visibleInJournal > 0) {{
+                        jSec.style.display = '';
+                        // auto-expand if filtering
+                        if (titleQuery || journalQuery) {{
+                            var jContent = jSec.querySelector('.journal-content');
+                            var jIcon = jSec.querySelector('.toggle-icon');
+                            if (jContent) jContent.style.display = 'block';
+                            if (jIcon) {{ jIcon.textContent = '▼'; jIcon.classList.add('expanded'); }}
+                        }}
+                        pubVisibleJournals += 1;
+                    }} else {{
+                        jSec.style.display = 'none';
+                    }}
+                }});
+                
+                if (pubVisibleJournals > 0) {{
+                    pubSec.style.display = '';
+                    if (journalQuery || titleQuery) {{
+                        var pContent = pubSec.querySelector('.publisher-content');
+                        var pIcon = pubSec.querySelector('.toggle-icon');
+                        if (pContent) pContent.style.display = 'block';
+                        if (pIcon) {{ pIcon.textContent = '▼'; pIcon.classList.add('expanded'); }}
+                    }}
+                }} else {{
+                    pubSec.style.display = 'none';
+                }}
+            }});
+            
+            updateCounter(visibleArticles, totalArticles);
+            showNoResultsIfNeeded(visibleArticles, 'publications_content');
         }}
         
         // Auto-close publications section by default
@@ -2585,6 +2963,23 @@ def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List
         <div class="section-divider"></div>
         <div id="publications_content" class="section-content">
             <p style="margin-bottom: 12px; color: #666; font-size: 14px;">Sorted by {sort_display}</p>
+            <div class="js-filter-panel">
+                <div class="js-filter-field">
+                    <label>Filter by article title</label>
+                    <input type="text" class="js-filter-input" id="cit-filter-title"
+                           placeholder="substring in title"
+                           oninput="applyCitationsFilters()">
+                </div>
+                <div class="js-filter-field">
+                    <label>Min citations per year</label>
+                    <input type="number" class="js-filter-input" id="cit-filter-mincpy"
+                           placeholder="e.g. 5" min="0" step="0.1"
+                           oninput="applyCitationsFilters()">
+                </div>
+                <button class="js-filter-reset" onclick="resetCitationsFilters()">Reset</button>
+                <div class="js-filter-counter">Showing {total_articles} of {total_articles}</div>
+            </div>
+            <div class="js-filter-no-results">No matching publications. Try adjusting the filters.</div>
     ''')
     
     for idx, article in enumerate(articles, 1):
@@ -2605,6 +3000,7 @@ def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List
         type_color = article.get('type_color', '#7f8c8d')
         doi_url = article.get('doi_url', '')
         journal_name_article = article.get('journal_name', '')
+        title_raw = article.get('title', 'No title')
         
         meta_parts = []
         if year:
@@ -2635,7 +3031,10 @@ def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List
             citation_display = get_color_scale_html(citations, max_citations, 0)
         
         main_content.append(f'''
-        <div id="article_{idx}" class="article-item" style="margin: 10px 0; padding: 12px 16px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
+        <div id="article_{idx}" class="article-item"
+             data-article-title="{escape_html(title_raw.lower())}"
+             data-citations-per-year="{citations_per_year}"
+             style="margin: 10px 0; padding: 12px 16px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                 <span style="font-weight: 700; color: {primary};">{idx}.</span>
                 {rank_badge}
@@ -2929,6 +3328,8 @@ def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List
             font-size: 11px;
         }}
         
+        {_js_filter_common_styles()}
+        
         @media print {{
             .sidebar {{ display: none; }}
             .main-content {{ margin-left: 0; }}
@@ -2995,6 +3396,51 @@ def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List
                     }}
                 }}
             }}
+        }}
+        
+        {_js_filter_common_script()}
+        
+        function resetCitationsFilters() {{
+            var ti = document.getElementById('cit-filter-title');
+            var mi = document.getElementById('cit-filter-mincpy');
+            if (ti) ti.value = '';
+            if (mi) mi.value = '';
+            applyCitationsFilters();
+        }}
+        
+        function applyCitationsFilters() {{
+            var titleInput = document.getElementById('cit-filter-title');
+            var minInput = document.getElementById('cit-filter-mincpy');
+            var titleQuery = normalizeStr(titleInput ? titleInput.value : '');
+            var minVal = 0;
+            if (minInput && minInput.value !== '') {{
+                var parsed = parseFloat(minInput.value);
+                if (!isNaN(parsed)) minVal = parsed;
+            }}
+            
+            var total = 0;
+            var visible = 0;
+            
+            document.querySelectorAll('#publications_content .article-item').forEach(function(art) {{
+                total += 1;
+                var artTitle = normalizeStr(art.getAttribute('data-article-title') || '');
+                var cpyRaw = art.getAttribute('data-citations-per-year');
+                var cpy = cpyRaw !== null ? parseFloat(cpyRaw) : 0;
+                if (isNaN(cpy)) cpy = 0;
+                
+                var titleOk = !titleQuery || artTitle.indexOf(titleQuery) !== -1;
+                var cpyOk = cpy >= minVal;
+                
+                if (titleOk && cpyOk) {{
+                    art.style.display = '';
+                    visible += 1;
+                }} else {{
+                    art.style.display = 'none';
+                }}
+            }});
+            
+            updateCounter(visible, total);
+            showNoResultsIfNeeded(visible, 'publications_content');
         }}
         
         document.addEventListener('DOMContentLoaded', function() {{
@@ -3123,6 +3569,23 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
         </div>
         <div class="section-divider"></div>
         <div id="publications_content" class="section-content">
+            <div class="js-filter-panel">
+                <div class="js-filter-field">
+                    <label>Filter by country / affiliation</label>
+                    <input type="text" class="js-filter-input" id="ca-filter-aff"
+                           placeholder="e.g. Germany or University"
+                           oninput="applyCountryAffiliationFilters()">
+                </div>
+                <div class="js-filter-field">
+                    <label>Filter by article title</label>
+                    <input type="text" class="js-filter-input" id="ca-filter-title"
+                           placeholder="substring in title"
+                           oninput="applyCountryAffiliationFilters()">
+                </div>
+                <button class="js-filter-reset" onclick="resetCountryAffiliationFilters()">Reset</button>
+                <div class="js-filter-counter">Showing {total_articles} of {total_articles}</div>
+            </div>
+            <div class="js-filter-no-results">No matching publications. Try adjusting the filters.</div>
     ''')
     
     # Country -> Affiliation hierarchy with expandable lists
@@ -3134,7 +3597,8 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
         is_first_country = (country_counter == 1)
         
         main_content.append(f'''
-        <div id="country_{country_id}" class="country-section">
+        <div id="country_{country_id}" class="country-section"
+             data-country-name="{escape_html(country.lower())}">
             <div class="country-header" onclick="toggleCountry('{country_id}')">
                 <span class="toggle-icon" id="country_icon_{country_id}">{'▼' if is_first_country else '▶'}</span>
                 <span class="country-name">🌍 {escape_html(country)}</span>
@@ -3150,7 +3614,8 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             is_first_affiliation = (affiliation_counter == 1 and is_first_country)
             
             main_content.append(f'''
-                <div id="affiliation_{aff_id}" class="affiliation-section">
+                <div id="affiliation_{aff_id}" class="affiliation-section"
+                     data-affiliation-name="{escape_html(affiliation.lower())}">
                     <div class="affiliation-header" onclick="toggleAffiliation('{aff_id}')">
                         <span class="toggle-icon" id="affiliation_icon_{aff_id}">{'▼' if is_first_affiliation else '▶'}</span>
                         <span class="affiliation-name">🏛️ {escape_html(affiliation)}</span>
@@ -3177,6 +3642,7 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
                 type_color = article.get('type_color', '#7f8c8d')
                 doi_url = article.get('doi_url', '')
                 journal_name_article = article.get('journal_name', '')
+                title_raw = article.get('title', 'No title')
                 
                 meta_parts = []
                 if year:
@@ -3192,7 +3658,8 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
                 meta_str = ', '.join(meta_parts) if meta_parts else ''
                 
                 main_content.append(f'''
-                        <div class="article-item" style="margin: 6px 0; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
+                        <div class="article-item" data-article-title="{escape_html(title_raw.lower())}"
+                             style="margin: 6px 0; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
                             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                                 <span style="font-weight: 600; color: {primary}; font-size: 13px;">{idx}.</span>
                                 <span style="font-weight: 500; font-size: 14px;">{title}</span>
@@ -3608,6 +4075,8 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
             font-size: 11px;
         }}
         
+        {_js_filter_common_styles()}
+        
         @media print {{
             .sidebar {{ display: none; }}
             .main-content {{ margin-left: 0; }}
@@ -3719,6 +4188,908 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
                     }}
                 }}
             }}
+        }}
+        
+        {_js_filter_common_script()}
+        
+        function resetCountryAffiliationFilters() {{
+            var ai = document.getElementById('ca-filter-aff');
+            var ti = document.getElementById('ca-filter-title');
+            if (ai) ai.value = '';
+            if (ti) ti.value = '';
+            applyCountryAffiliationFilters();
+        }}
+        
+        function applyCountryAffiliationFilters() {{
+            var affInput = document.getElementById('ca-filter-aff');
+            var titleInput = document.getElementById('ca-filter-title');
+            var affQuery = normalizeStr(affInput ? affInput.value : '');
+            var titleQuery = normalizeStr(titleInput ? titleInput.value : '');
+            
+            var total = 0;
+            var visible = 0;
+            
+            document.querySelectorAll('.country-section').forEach(function(cSec) {{
+                var countryName = normalizeStr(cSec.getAttribute('data-country-name') || '');
+                var countryMatch = !affQuery || countryName.indexOf(affQuery) !== -1;
+                var visibleAffs = 0;
+                
+                cSec.querySelectorAll('.affiliation-section').forEach(function(aSec) {{
+                    var affName = normalizeStr(aSec.getAttribute('data-affiliation-name') || '');
+                    var affMatch = !affQuery || affName.indexOf(affQuery) !== -1;
+                    var groupMatch = countryMatch || affMatch;
+                    
+                    var visibleInAff = 0;
+                    aSec.querySelectorAll('.article-item').forEach(function(art) {{
+                        total += 1;
+                        var artTitle = normalizeStr(art.getAttribute('data-article-title') || '');
+                        var titleMatch = !titleQuery || artTitle.indexOf(titleQuery) !== -1;
+                        var ok = groupMatch && titleMatch;
+                        if (ok) {{
+                            art.style.display = '';
+                            visibleInAff += 1;
+                            visible += 1;
+                        }} else {{
+                            art.style.display = 'none';
+                        }}
+                    }});
+                    
+                    if (visibleInAff > 0) {{
+                        aSec.style.display = '';
+                        if (affQuery || titleQuery) {{
+                            var ac = aSec.querySelector('.affiliation-content');
+                            var ai = aSec.querySelector('.toggle-icon');
+                            if (ac) ac.style.display = 'block';
+                            if (ai) {{ ai.textContent = '▼'; ai.classList.add('expanded'); }}
+                        }}
+                        visibleAffs += 1;
+                    }} else {{
+                        aSec.style.display = 'none';
+                    }}
+                }});
+                
+                if (visibleAffs > 0) {{
+                    cSec.style.display = '';
+                    if (affQuery || titleQuery) {{
+                        var cc = cSec.querySelector('.country-content');
+                        var ci = cSec.querySelector('.toggle-icon');
+                        if (cc) cc.style.display = 'block';
+                        if (ci) {{ ci.textContent = '▼'; ci.classList.add('expanded'); }}
+                    }}
+                }} else {{
+                    cSec.style.display = 'none';
+                }}
+            }});
+            
+            updateCounter(visible, total);
+            showNoResultsIfNeeded(visible, 'publications_content');
+        }}
+        
+        // Auto-close publications section by default
+        document.addEventListener('DOMContentLoaded', function() {{
+            var sections = ['publications_content'];
+            sections.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.style.display = 'none';
+                }}
+            }});
+            var indicators = ['publications_indicator'];
+            indicators.forEach(function(id) {{
+                var el = document.getElementById(id);
+                if (el) {{
+                    el.textContent = '▶';
+                    el.classList.add('collapsed');
+                }}
+            }});
+        }});
+    </script>
+</body>
+</html>'''
+    
+    return html_content
+
+
+# ============================================================================
+# NEW: FUNDER & AWARD REPORT GENERATION
+# ============================================================================
+
+def generate_html_by_funder_award(journal_name: str, journal_abbr: str, years: List[int],
+                                  hierarchy: Dict, report_title: str = "Report by Funder & Award",
+                                  sort_funder: str = 'alphabetical',
+                                  sort_award: str = 'alphabetical') -> str:
+    """Generate HTML report grouping articles by Funder -> Award ID with hierarchical expandable lists."""
+    
+    # Get filter info from session_state
+    search_query = st.session_state.get('search_query', '')
+    has_filter = 'filtered_articles' in st.session_state and st.session_state.filtered_articles
+    
+    total_articles = sum(len(articles) for funder in hierarchy.values()
+                         for award in funder.values()
+                         for articles in [award])
+    total_funders = len(hierarchy)
+    
+    # Primary colors
+    primary = '#667eea'
+    secondary = '#764ba2'
+    
+    # Build navigation items
+    nav_items = []
+    nav_items.append(f'<a href="#overview"><span class="nav-icon">📋</span> Overview</a>')
+    nav_items.append(f'<a href="#publications"><span class="nav-icon">💰</span> Funders</a>')
+    
+    for funder in hierarchy.keys():
+        funder_id = hashlib.md5(funder.encode('utf-8')).hexdigest()[:8]
+        funder_articles = sum(len(articles) for articles in hierarchy[funder].values())
+        nav_items.append(f'<a href="#funder_{funder_id}" style="padding-left: 20px;"><span class="nav-icon">💰</span> {escape_html(funder[:25])} <span style="font-size: 10px; opacity: 0.7;">({funder_articles})</span></a>')
+    
+    # Build TOC items
+    toc_items = []
+    for funder, awards in hierarchy.items():
+        funder_articles = sum(len(articles) for articles in awards.values())
+        funder_id = hashlib.md5(funder.encode('utf-8')).hexdigest()[:8]
+        toc_items.append(f'<div class="toc-item toc-funder"><a href="#funder_{funder_id}">💰 {escape_html(funder)} <span class="toc-badge">{funder_articles}</span></a></div>')
+        
+        for award, articles in awards.items():
+            award_articles = len(articles)
+            award_id = hashlib.md5(f"{funder}_{award}".encode('utf-8')).hexdigest()[:8]
+            toc_items.append(f'<div class="toc-item toc-award"><a href="#award_{award_id}">└ 🎫 {escape_html(award[:50])}{"..." if len(award) > 50 else ""} <span class="toc-badge">{award_articles}</span></a></div>')
+    
+    # Build main content
+    main_content = []
+    
+    # Overview section
+    main_content.append(f'''
+    <div id="overview" class="section">
+        <div class="section-header" onclick="toggleSection('overview_content')">
+            <div class="section-title">
+                <span class="icon">📋</span> Overview
+                <span class="section-badge">{total_articles} articles</span>
+            </div>
+            <span class="toggle-indicator" id="overview_indicator">▼</span>
+        </div>
+        <div class="section-divider"></div>
+        <div id="overview_content" class="section-content">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value">{total_articles}</div>
+                    <div class="metric-label">Total Articles</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{total_funders}</div>
+                    <div class="metric-label">Funders</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{len(years)}</div>
+                    <div class="metric-label">Years</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{format_year_filter_for_filename(years)}</div>
+                    <div class="metric-label">Period</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 15px; padding: 12px 16px; background: #f8f9fa; border-radius: 8px; border-left: 3px solid {primary};">
+                <strong>Report Type:</strong> {report_title}<br>
+                <strong>Sorting:</strong> Funders — {sort_funder.replace('_', ' ').title()}, Awards — {sort_award.replace('_', ' ').title()}
+                {f'<br><strong>Applied Filter:</strong> «{escape_html(search_query)}»' if search_query and has_filter else ''}
+            </div>
+            
+            <div style="margin-top: 15px;">
+                <h3 style="color: {primary}; font-size: 16px;">📑 Table of Contents</h3>
+                <div style="max-height: 400px; overflow-y: auto; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                    {''.join(toc_items)}
+                </div>
+            </div>
+        </div>
+    </div>
+    ''')
+    
+    # Publications section
+    main_content.append(f'''
+    <div id="publications" class="section">
+        <div class="section-header" onclick="toggleSection('publications_content')">
+            <div class="section-title">
+                <span class="icon">💰</span> Publications by Funder & Award
+                <span class="section-badge">{total_articles} articles</span>
+            </div>
+            <span class="toggle-indicator" id="publications_indicator">▼</span>
+        </div>
+        <div class="section-divider"></div>
+        <div id="publications_content" class="section-content">
+            <div class="js-filter-panel">
+                <div class="js-filter-field">
+                    <label>Filter by funder name</label>
+                    <input type="text" class="js-filter-input" id="fa-filter-funder"
+                           placeholder="e.g. National Science"
+                           oninput="applyFunderAwardFilters()">
+                </div>
+                <div class="js-filter-field">
+                    <label>Filter by award ID</label>
+                    <input type="text" class="js-filter-input" id="fa-filter-award"
+                           placeholder="e.g. ECR/2015"
+                           oninput="applyFunderAwardFilters()">
+                </div>
+                <div class="js-filter-field">
+                    <label>Filter by article title</label>
+                    <input type="text" class="js-filter-input" id="fa-filter-title"
+                           placeholder="substring in title"
+                           oninput="applyFunderAwardFilters()">
+                </div>
+                <button class="js-filter-reset" onclick="resetFunderAwardFilters()">Reset</button>
+                <div class="js-filter-counter">Showing {total_articles} of {total_articles}</div>
+            </div>
+            <div class="js-filter-no-results">No matching publications. Try adjusting the filters.</div>
+    ''')
+    
+    # Funder -> Award hierarchy with expandable lists
+    funder_counter = 0
+    for funder, awards in hierarchy.items():
+        funder_articles = sum(len(articles) for articles in awards.values())
+        funder_id = hashlib.md5(funder.encode('utf-8')).hexdigest()[:8]
+        funder_counter += 1
+        is_first_funder = (funder_counter == 1)
+        
+        main_content.append(f'''
+        <div id="funder_{funder_id}" class="funder-section"
+             data-funder-name="{escape_html(funder.lower())}">
+            <div class="funder-header" onclick="toggleFunder('{funder_id}')">
+                <span class="toggle-icon" id="funder_icon_{funder_id}">{'▼' if is_first_funder else '▶'}</span>
+                <span class="funder-name">💰 {escape_html(funder)}</span>
+                <span class="badge">{funder_articles} articles</span>
+            </div>
+            <div class="funder-content" id="funder_content_{funder_id}" style="display: {'block' if is_first_funder else 'none'};">
+        ''')
+        
+        award_counter = 0
+        for award, articles in awards.items():
+            award_id = hashlib.md5(f"{funder}_{award}".encode('utf-8')).hexdigest()[:8]
+            award_counter += 1
+            is_first_award = (award_counter == 1 and is_first_funder)
+            
+            main_content.append(f'''
+                <div id="award_{award_id}" class="award-section"
+                     data-award-name="{escape_html(award.lower())}">
+                    <div class="award-header" onclick="toggleAward('{award_id}')">
+                        <span class="toggle-icon" id="award_icon_{award_id}">{'▼' if is_first_award else '▶'}</span>
+                        <span class="award-name">🎫 {escape_html(award)}</span>
+                        <span class="badge award-badge">{len(articles)} articles</span>
+                    </div>
+                    <div class="award-content" id="award_content_{award_id}" style="display: {'block' if is_first_award else 'none'};">
+            ''')
+            
+            for idx, article in enumerate(articles, 1):
+                title = escape_html(article.get('title', 'No title'))
+                authors = escape_html(article.get('authors', 'Authors not specified'))
+                affiliations_str = escape_html(article.get('affiliations_str', ''))
+                year = article.get('publication_year', '')
+                pub_date = article.get('publication_date', '')
+                volume = article.get('volume', '')
+                issue = article.get('issue', '')
+                pages = article.get('pages', '')
+                citations = article.get('cited_by_count', 0)
+                citations_per_year = article.get('citations_per_year', 0)
+                references = article.get('referenced_works_count', 0)
+                oa_status = article.get('oa_status', 'Closed Access')
+                type_label = article.get('type_label', 'Other')
+                type_icon = article.get('type_icon', '📎')
+                type_color = article.get('type_color', '#7f8c8d')
+                doi_url = article.get('doi_url', '')
+                journal_name_article = article.get('journal_name', '')
+                title_raw = article.get('title', 'No title')
+                funder_names_str = escape_html(article.get('funder_names_str', ''))
+                award_ids_str = escape_html(article.get('award_ids_str', ''))
+                
+                meta_parts = []
+                if year:
+                    meta_parts.append(str(year))
+                if pub_date and pub_date != '0000-00-00':
+                    meta_parts.append(f"({pub_date})")
+                if volume:
+                    meta_parts.append(f"Vol. {volume}")
+                if issue:
+                    meta_parts.append(f"Iss. {issue}")
+                if pages:
+                    meta_parts.append(f"pp. {pages}")
+                meta_str = ', '.join(meta_parts) if meta_parts else ''
+                
+                main_content.append(f'''
+                        <div class="article-item" data-article-title="{escape_html(title_raw.lower())}"
+                             style="margin: 6px 0; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid {type_color};">
+                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                                <span style="font-weight: 600; color: {primary}; font-size: 13px;">{idx}.</span>
+                                <span style="font-weight: 500; font-size: 14px;">{title}</span>
+                                <span style="color: {type_color}; font-size: 0.8rem; background: {type_color}20; padding: 0 8px; border-radius: 10px;">{type_icon} {type_label}</span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: #555; margin-top: 3px;">
+                                <strong>Authors:</strong> {authors}
+                            </div>
+                            {f'<div style="font-size: 0.8rem; color: #666;"><strong>Affiliations:</strong> {affiliations_str}</div>' if affiliations_str and affiliations_str != 'No affiliations specified' else ''}
+                            {f'<div style="font-size: 0.8rem; color: #666;"><strong>Journal:</strong> {escape_html(journal_name_article)}</div>' if journal_name_article else ''}
+                            {f'<div style="font-size: 0.8rem; color: #666;"><strong>Funders:</strong> {funder_names_str}</div>' if funder_names_str and funder_names_str != 'No funding information' else ''}
+                            {f'<div style="font-size: 0.8rem; color: #666;"><strong>Awards:</strong> {award_ids_str}</div>' if award_ids_str and award_ids_str != 'No award information' else ''}
+                            {f'<div style="font-size: 0.8rem; color: #666;">{meta_str}</div>' if meta_str else ''}
+                            <div style="font-size: 0.8rem; color: #666; display: flex; flex-wrap: wrap; gap: 10px; margin-top: 2px;">
+                                <span><strong>Citations:</strong> {citations}</span>
+                                <span><strong>Per year:</strong> {citations_per_year:.1f}</span>
+                                <span><strong>References:</strong> {references}</span>
+                                <span><strong>OA:</strong> {oa_status}</span>
+                            </div>
+                            {f'<div style="font-size: 0.75rem; margin-top: 2px;"><a href="{doi_url}" target="_blank" style="color: #2980B9; text-decoration: none;">{doi_url}</a></div>' if doi_url else ''}
+                        </div>
+                ''')
+            
+            main_content.append('''
+                    </div>
+                </div>
+            ''')
+        
+        main_content.append('''
+            </div>
+        </div>
+        ''')
+    
+    main_content.append('</div></div>')
+    
+    # Footer
+    main_content.append(f'''
+    <div class="footer">
+        <p>© Chimica Techno Acta | {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+        <p>Report generated using CTA Article Recommender Pro*2</p>
+    </div>
+    ''')
+    
+    # Complete HTML
+    html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{escape_html(journal_name)} - Funder & Award Report</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Times New Roman', 'DejaVu Serif', serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            color: #333;
+        }}
+        .report-wrapper {{
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            border-radius: 10px;
+            overflow: hidden;
+        }}
+        
+        .sidebar {{
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 280px;
+            height: 100vh;
+            background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+            color: white;
+            padding: 20px 16px;
+            overflow-y: auto;
+            z-index: 1000;
+            box-shadow: 2px 0 20px rgba(0,0,0,0.15);
+        }}
+        .sidebar::-webkit-scrollbar {{ width: 4px; }}
+        .sidebar::-webkit-scrollbar-thumb {{ background: rgba(255,255,255,0.3); border-radius: 4px; }}
+        
+        .sidebar h3 {{
+            margin-bottom: 16px;
+            font-size: 16px;
+            font-weight: 700;
+            color: white;
+            border-bottom: 2px solid rgba(255,255,255,0.3);
+            padding-bottom: 12px;
+            letter-spacing: 0.5px;
+            word-wrap: break-word;
+        }}
+        .sidebar a {{
+            color: white;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 10px;
+            margin: 1px 0;
+            border-radius: 6px;
+            transition: all 0.3s;
+            font-size: 12px;
+        }}
+        .sidebar a:hover {{
+            background: rgba(255,255,255,0.2);
+            transform: translateX(4px);
+        }}
+        .sidebar a .nav-icon {{
+            font-size: 14px;
+            width: 22px;
+            text-align: center;
+        }}
+        .sidebar .sidebar-footer {{
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.2);
+            font-size: 10px;
+            opacity: 0.7;
+            line-height: 1.5;
+        }}
+        
+        .main-content {{
+            margin-left: 280px;
+            padding: 25px 35px;
+        }}
+        
+        .header {{
+            background: linear-gradient(135deg, {primary} 0%, {secondary} 100%);
+            color: white;
+            padding: 25px 35px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }}
+        .header h1 {{
+            color: white;
+            margin: 0;
+            font-size: 26px;
+            font-weight: 700;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            word-wrap: break-word;
+        }}
+        .header .subtitle {{
+            opacity: 0.9;
+            margin-top: 4px;
+            font-size: 13px;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+        }}
+        
+        .section {{
+            background: white;
+            border-radius: 12px;
+            padding: 20px 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            border: 1px solid #f0f0f0;
+            transition: all 0.3s;
+        }}
+        .section:hover {{
+            box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+        }}
+        
+        .section-header {{
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            user-select: none;
+            padding: 4px 0;
+        }}
+        .section-header:hover .section-title {{
+            color: {primary};
+        }}
+        .section-title {{
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #2C3E50;
+            transition: color 0.3s;
+        }}
+        .section-title .icon {{
+            font-size: 22px;
+        }}
+        .section-title .section-badge {{
+            background: linear-gradient(135deg, {primary}, {secondary});
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 6px;
+        }}
+        .section-divider {{
+            height: 2px;
+            background: linear-gradient(90deg, {primary}, {secondary}, transparent);
+            margin: 12px 0 16px 0;
+            border-radius: 2px;
+        }}
+        .toggle-indicator {{
+            font-size: 16px;
+            transition: transform 0.3s;
+            color: {primary};
+            font-weight: 300;
+        }}
+        .toggle-indicator.collapsed {{
+            transform: rotate(-90deg);
+        }}
+        .section-content {{
+            display: block;
+            transition: all 0.4s ease;
+        }}
+        .section-content.collapsed {{
+            display: none;
+        }}
+        
+        .metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 12px 0;
+        }}
+        .metric-card {{
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            padding: 12px 16px;
+            border-radius: 10px;
+            border-left: 4px solid {primary};
+            text-align: center;
+            transition: all 0.3s;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+            position: relative;
+            overflow: hidden;
+        }}
+        .metric-card:hover {{
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+            border-left-color: {secondary};
+        }}
+        .metric-value {{
+            font-size: 24px;
+            font-weight: 700;
+            color: #2C3E50;
+            font-family: 'Times New Roman', serif;
+            background: linear-gradient(135deg, {primary}, {secondary});
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }}
+        .metric-label {{
+            font-size: 10px;
+            color: #7F8C8D;
+            margin-top: 3px;
+            font-family: 'Times New Roman', serif;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }}
+        
+        .toc-item {{
+            padding: 3px 0;
+            font-size: 13px;
+        }}
+        .toc-item a {{
+            color: #2C3E50;
+            text-decoration: none;
+            transition: color 0.2s;
+        }}
+        .toc-item a:hover {{
+            color: {primary};
+            text-decoration: underline;
+        }}
+        .toc-item.toc-funder {{
+            font-weight: 600;
+            color: {primary};
+        }}
+        .toc-item.toc-award {{
+            padding-left: 24px;
+            font-size: 12px;
+            color: #555;
+        }}
+        .toc-badge {{
+            display: inline-block;
+            background: #667eea20;
+            padding: 0 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            color: {primary};
+        }}
+        
+        .funder-section {{
+            margin: 12px 0 16px 0;
+            border-left: 4px solid {primary};
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+        .funder-header {{
+            padding: 10px 16px;
+            background: linear-gradient(135deg, {primary}10, {secondary}10);
+            cursor: pointer;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.3s;
+            font-weight: 600;
+            font-size: 16px;
+            user-select: none;
+        }}
+        .funder-header:hover {{
+            background: linear-gradient(135deg, {primary}20, {secondary}20);
+        }}
+        .funder-name {{
+            flex: 1;
+            color: #2C3E50;
+        }}
+        .badge {{
+            display: inline-block;
+            background: linear-gradient(135deg, {primary}, {secondary});
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+        }}
+        .funder-content {{
+            padding: 8px 0 8px 16px;
+            background: #fafbfc;
+        }}
+        
+        .award-section {{
+            margin: 8px 0 8px 8px;
+            border-left: 3px solid {secondary};
+            border-radius: 4px;
+            overflow: hidden;
+        }}
+        .award-header {{
+            padding: 6px 14px;
+            background: #f0f1f3;
+            cursor: pointer;
+            border-radius: 4px 4px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s;
+            font-weight: 500;
+            font-size: 14px;
+            user-select: none;
+        }}
+        .award-header:hover {{
+            background: #e5e7eb;
+        }}
+        .award-name {{
+            flex: 1;
+            color: #2C3E50;
+        }}
+        .award-badge {{
+            background: linear-gradient(135deg, {secondary}, {primary});
+            font-size: 10px;
+            padding: 1px 10px;
+        }}
+        .award-content {{
+            padding: 6px 0 6px 16px;
+            background: #f8f9fa;
+        }}
+        
+        .toggle-icon {{
+            display: inline-block;
+            transition: transform 0.3s ease;
+            font-size: 14px;
+            color: {primary};
+            font-weight: 300;
+        }}
+        .toggle-icon.expanded {{
+            transform: rotate(90deg);
+        }}
+        
+        .article-item {{
+            transition: all 0.2s;
+            margin: 4px 0;
+        }}
+        .article-item:hover {{
+            background: #e9ecef !important;
+            transform: translateX(3px);
+        }}
+        
+        .footer {{
+            margin-top: 30px;
+            padding-top: 16px;
+            border-top: 2px solid #e9ecef;
+            text-align: center;
+            color: #7F8C8D;
+            font-size: 11px;
+        }}
+        
+        {_js_filter_common_styles()}
+        
+        @media print {{
+            .sidebar {{ display: none; }}
+            .main-content {{ margin-left: 0; }}
+            .section {{ box-shadow: none; border: 1px solid #ddd; }}
+        }}
+        @media (max-width: 768px) {{
+            .sidebar {{ display: none; }}
+            .main-content {{ margin-left: 0; padding: 15px; }}
+            .header {{ padding: 15px 20px; }}
+            .header h1 {{ font-size: 20px; }}
+            .metrics-grid {{ grid-template-columns: repeat(2, 1fr); }}
+            .funder-content {{ padding-left: 8px; }}
+            .award-content {{ padding-left: 8px; }}
+        }}
+        
+        @keyframes fadeInUp {{
+            from {{ opacity: 0; transform: translateY(20px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        .section {{
+            animation: fadeInUp 0.5s ease forwards;
+        }}
+        .section:nth-child(2) {{ animation-delay: 0.1s; }}
+        .section:nth-child(3) {{ animation-delay: 0.2s; }}
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h3>{escape_html(journal_abbr)}</h3>
+        {''.join(nav_items)}
+        <div class="sidebar-footer">
+            <div>Period: {format_year_filter_for_filename(years)}</div>
+            <div>Total: {total_articles} articles</div>
+            <div style="margin-top: 3px; font-size: 9px; opacity: 0.6;">Generated: {datetime.now().strftime('%d.%m.%Y %H:%M')}</div>
+        </div>
+    </div>
+    
+    <div class="main-content">
+        <div class="header">
+            <h1>{escape_html(journal_name)}</h1>
+            <div class="subtitle">
+                Funder &amp; Award Report | Period: {format_year_filter_for_filename(years)} | Total: {total_articles} articles
+                {f' | Filter: «{escape_html(search_query)}»' if search_query and has_filter else ''}
+            </div>
+        </div>
+        
+        {''.join(main_content)}
+    </div>
+    
+    <script>
+        // Toggle funder section
+        function toggleFunder(funderId) {{
+            var content = document.getElementById('funder_content_' + funderId);
+            var icon = document.getElementById('funder_icon_' + funderId);
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (icon) {{
+                        icon.textContent = '▼';
+                        icon.classList.add('expanded');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (icon) {{
+                        icon.textContent = '▶';
+                        icon.classList.remove('expanded');
+                    }}
+                }}
+            }}
+        }}
+        
+        // Toggle award section
+        function toggleAward(awardId) {{
+            var content = document.getElementById('award_content_' + awardId);
+            var icon = document.getElementById('award_icon_' + awardId);
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (icon) {{
+                        icon.textContent = '▼';
+                        icon.classList.add('expanded');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (icon) {{
+                        icon.textContent = '▶';
+                        icon.classList.remove('expanded');
+                    }}
+                }}
+            }}
+        }}
+        
+        // Toggle main section
+        function toggleSection(sectionId) {{
+            var content = document.getElementById(sectionId);
+            var indicator = document.getElementById(sectionId.replace('_content', '_indicator'));
+            if (content) {{
+                if (content.style.display === 'none' || content.style.display === '') {{
+                    content.style.display = 'block';
+                    if (indicator) {{
+                        indicator.textContent = '▼';
+                        indicator.classList.remove('collapsed');
+                    }}
+                }} else {{
+                    content.style.display = 'none';
+                    if (indicator) {{
+                        indicator.textContent = '▶';
+                        indicator.classList.add('collapsed');
+                    }}
+                }}
+            }}
+        }}
+        
+        {_js_filter_common_script()}
+        
+        function resetFunderAwardFilters() {{
+            var fi = document.getElementById('fa-filter-funder');
+            var ai = document.getElementById('fa-filter-award');
+            var ti = document.getElementById('fa-filter-title');
+            if (fi) fi.value = '';
+            if (ai) ai.value = '';
+            if (ti) ti.value = '';
+            applyFunderAwardFilters();
+        }}
+        
+        function applyFunderAwardFilters() {{
+            var funderInput = document.getElementById('fa-filter-funder');
+            var awardInput = document.getElementById('fa-filter-award');
+            var titleInput = document.getElementById('fa-filter-title');
+            var funderQuery = normalizeStr(funderInput ? funderInput.value : '');
+            var awardQuery = normalizeStr(awardInput ? awardInput.value : '');
+            var titleQuery = normalizeStr(titleInput ? titleInput.value : '');
+            
+            var total = 0;
+            var visible = 0;
+            
+            document.querySelectorAll('.funder-section').forEach(function(fSec) {{
+                var funderName = normalizeStr(fSec.getAttribute('data-funder-name') || '');
+                var funderMatch = !funderQuery || funderName.indexOf(funderQuery) !== -1;
+                var visibleAwards = 0;
+                
+                fSec.querySelectorAll('.award-section').forEach(function(aSec) {{
+                    var awardName = normalizeStr(aSec.getAttribute('data-award-name') || '');
+                    var awardMatch = !awardQuery || awardName.indexOf(awardQuery) !== -1;
+                    var groupMatch = funderMatch && awardMatch;
+                    
+                    var visibleInAward = 0;
+                    aSec.querySelectorAll('.article-item').forEach(function(art) {{
+                        total += 1;
+                        var artTitle = normalizeStr(art.getAttribute('data-article-title') || '');
+                        var titleMatch = !titleQuery || artTitle.indexOf(titleQuery) !== -1;
+                        var ok = groupMatch && titleMatch;
+                        if (ok) {{
+                            art.style.display = '';
+                            visibleInAward += 1;
+                            visible += 1;
+                        }} else {{
+                            art.style.display = 'none';
+                        }}
+                    }});
+                    
+                    if (visibleInAward > 0) {{
+                        aSec.style.display = '';
+                        if (funderQuery || awardQuery || titleQuery) {{
+                            var ac = aSec.querySelector('.award-content');
+                            var ai = aSec.querySelector('.toggle-icon');
+                            if (ac) ac.style.display = 'block';
+                            if (ai) {{ ai.textContent = '▼'; ai.classList.add('expanded'); }}
+                        }}
+                        visibleAwards += 1;
+                    }} else {{
+                        aSec.style.display = 'none';
+                    }}
+                }});
+                
+                if (visibleAwards > 0) {{
+                    fSec.style.display = '';
+                    if (funderQuery || awardQuery || titleQuery) {{
+                        var fc = fSec.querySelector('.funder-content');
+                        var fi = fSec.querySelector('.toggle-icon');
+                        if (fc) fc.style.display = 'block';
+                        if (fi) {{ fi.textContent = '▼'; fi.classList.add('expanded'); }}
+                    }}
+                }} else {{
+                    fSec.style.display = 'none';
+                }}
+            }});
+            
+            updateCounter(visible, total);
+            showNoResultsIfNeeded(visible, 'publications_content');
         }}
         
         // Auto-close publications section by default
@@ -4142,7 +5513,7 @@ def step_year_selection():
             st.rerun()
 
 def step_results():
-    """Step 5: Results with 3 HTML reports"""
+    """Step 5: Results with 4 HTML reports"""
     st.markdown("""
     <div class="step-card">
         <h3 style="margin: 0; font-size: 1.3rem;">📊 Step 5: Analysis Results</h3>
@@ -4206,10 +5577,19 @@ def step_results():
     total_citations = sum(w.get('cited_by_count', 0) for w in current_articles)
     avg_citations = total_citations / total_articles if total_articles > 0 else 0
     
+    # Count funders across current articles
+    funders_set = set()
+    for w in current_articles:
+        for f in (w.get('funders') or []):
+            fname = f.get('display_name')
+            if fname:
+                funders_set.add(fname)
+    total_funders = len(funders_set)
+    
     # Sorting options
     st.markdown("### ⚙️ Report Sorting Options")
     
-    col_sort1, col_sort2, col_sort3 = st.columns(3)
+    col_sort1, col_sort2, col_sort3, col_sort4 = st.columns(4)
     
     with col_sort1:
         sort_publisher = st.radio(
@@ -4235,10 +5615,19 @@ def step_results():
             key="sort_country"
         )
     
+    with col_sort4:
+        sort_funder = st.radio(
+            "Funder → Award sorting:",
+            options=["Alphabetical", "By Article Count"],
+            index=0,
+            key="sort_funder"
+        )
+    
     # Convert UI options to function parameters
     sort_publisher_param = 'alphabetical' if sort_publisher == "Alphabetical" else 'by_count'
     sort_citations_param = 'citations_per_year' if sort_citations == "Citations per Year" else ('total_citations' if sort_citations == "Total Citations" else 'publication_date')
     sort_country_param = 'alphabetical' if sort_country == "Alphabetical" else 'by_count'
+    sort_funder_param = 'alphabetical' if sort_funder == "Alphabetical" else 'by_count'
     
     # Generate groupings with caching using unique keys
     with st.spinner("Generating report groupings..."):
@@ -4255,12 +5644,18 @@ def step_results():
             sort_country_param
         )
         
+        funder_hierarchy = cached_group_articles_by_funder_award(
+            tuple(current_articles), 
+            sort_funder_param,
+            sort_funder_param
+        )
+        
         citations_sorted = cached_sort_articles_by_citations(
             tuple(current_articles), 
             sort_citations_param
         )
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.markdown(f"""
         <div class="metric-card">
@@ -4283,6 +5678,13 @@ def step_results():
         </div>
         """, unsafe_allow_html=True)
     with col4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-value">{total_funders}</div>
+            <div class="metric-label">Funders</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col5:
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-value">{avg_citations:.1f}</div>
@@ -4308,6 +5710,7 @@ def step_results():
     cache_key_publisher = f"html_publisher_{topic_id}_{years_hash}_{filter_hash}_{sort_publisher_param}"
     cache_key_citations = f"html_citations_{topic_id}_{years_hash}_{filter_hash}_{sort_citations_param}"
     cache_key_country = f"html_country_{topic_id}_{years_hash}_{filter_hash}_{sort_country_param}"
+    cache_key_funder = f"html_funder_{topic_id}_{years_hash}_{filter_hash}_{sort_funder_param}"
     
     # Advanced Search button
     col_adv1, col_adv2, col_adv3 = st.columns([1, 2, 1])
@@ -4334,7 +5737,7 @@ def step_results():
                             "Report by Publisher & Journal",
                             sort_publisher_param
                         )
-                    progress_bar.progress(0.33)
+                    progress_bar.progress(0.25)
                     
                     status_text.text("Generating Citations per Year report...")
                     if cache_key_citations not in st.session_state.html_cache:
@@ -4344,7 +5747,7 @@ def step_results():
                             "Report by Citations",
                             sort_citations_param
                         )
-                    progress_bar.progress(0.66)
+                    progress_bar.progress(0.5)
                     
                     status_text.text("Generating Country → Affiliation report...")
                     if cache_key_country not in st.session_state.html_cache:
@@ -4353,6 +5756,17 @@ def step_results():
                             country_hierarchy,
                             "Report by Country & Affiliation",
                             sort_country_param
+                        )
+                    progress_bar.progress(0.75)
+                    
+                    status_text.text("Generating Funder → Award report...")
+                    if cache_key_funder not in st.session_state.html_cache:
+                        st.session_state.html_cache[cache_key_funder] = generate_html_by_funder_award(
+                            journal_name, journal_abbr, years,
+                            funder_hierarchy,
+                            "Report by Funder & Award",
+                            sort_funder_param,
+                            sort_funder_param
                         )
                     progress_bar.progress(1.0)
                     
@@ -4365,7 +5779,7 @@ def step_results():
     
     st.markdown("---")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.markdown("**📚 Report 1: Publisher → Journal**")
@@ -4460,10 +5874,42 @@ def step_results():
                     st.session_state.html_cache[cache_key_country] = html_data
                     st.rerun()
     
+    with col4:
+        st.markdown("**💰 Report 4: Funder → Award**")
+        st.markdown(f"*{sort_funder} sorting*")
+        
+        if cache_key_funder in st.session_state.html_cache:
+            html_data = st.session_state.html_cache[cache_key_funder]
+        else:
+            html_data = None
+        
+        if html_data is not None:
+            filename = f"{journal_abbr}_{format_year_filter_for_filename(years)}_funder_award.html"
+            st.download_button(
+                label="📄 Download Funder Report (HTML)",
+                data=html_data,
+                file_name=filename,
+                mime="text/html",
+                use_container_width=True,
+                key=f"html_funder_download_{cache_key_funder}"
+            )
+        else:
+            if st.button("📄 Generate Funder Report", key=f"gen_html_funder_{cache_key_funder}", use_container_width=True):
+                with st.spinner("Generating Funder Report..."):
+                    html_data = generate_html_by_funder_award(
+                        journal_name, journal_abbr, years,
+                        funder_hierarchy,
+                        "Report by Funder & Award",
+                        sort_funder_param,
+                        sort_funder_param
+                    )
+                    st.session_state.html_cache[cache_key_funder] = html_data
+                    st.rerun()
+    
     st.markdown("---")
     
     if st.session_state.all_reports_generated:
-        if all(key in st.session_state.html_cache for key in [cache_key_publisher, cache_key_citations, cache_key_country]):
+        if all(key in st.session_state.html_cache for key in [cache_key_publisher, cache_key_citations, cache_key_country, cache_key_funder]):
             try:
                 import zipfile
                 zip_buffer = io.BytesIO()
@@ -4474,6 +5920,8 @@ def step_results():
                                      st.session_state.html_cache[cache_key_citations])
                     zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_country_affiliation.html", 
                                      st.session_state.html_cache[cache_key_country])
+                    zip_file.writestr(f"{journal_abbr}_{format_year_filter_for_filename(years)}_funder_award.html", 
+                                     st.session_state.html_cache[cache_key_funder])
                 
                 zip_data = zip_buffer.getvalue()
                 
