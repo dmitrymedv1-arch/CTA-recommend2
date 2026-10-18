@@ -5276,109 +5276,98 @@ def step_analysis():
             st.rerun()
 
 def step_topic_selection():
-    """Step 3: Topic Selection"""
+    """Step 3: Topic Selection (up to 3 topics)"""
     st.markdown("""
     <div class="step-card">
-        <h3 style="margin: 0; font-size: 1.3rem;">🎯 Step 3: Select Research Topic</h3>
-        <p style="margin: 5px 0; font-size: 0.9rem;">Choose a topic for deep analysis.</p>
+        <h3 style="margin: 0; font-size: 1.3rem;">🎯 Step 3: Select Research Topic(s)</h3>
+        <p style="margin: 5px 0; font-size: 0.9rem;">Choose up to 3 topics for deep analysis.</p>
     </div>
     """, unsafe_allow_html=True)
-    
+
     if not st.session_state.works_data:
         st.error("❌ No data available. Please start from Step 1.")
         return
-    
+
     # Back button
     col_back, col_main = st.columns([1, 5])
     with col_back:
         if st.button("← Back", use_container_width=True):
             st.session_state.current_step = 2
-            # Clear any existing topic selection when going back
-            if 'selected_topic' in st.session_state:
-                del st.session_state.selected_topic
-            if 'selected_topic_id' in st.session_state:
-                del st.session_state.selected_topic_id
-            if 'selected_years' in st.session_state:
-                del st.session_state.selected_years
-            if 'all_works' in st.session_state:
-                del st.session_state.all_works
-            if 'enriched_count' in st.session_state:
-                del st.session_state.enriched_count
-            if 'html_cache' in st.session_state:
-                del st.session_state.html_cache
-            if 'all_reports_generated' in st.session_state:
-                del st.session_state.all_reports_generated
-            if 'filtered_articles' in st.session_state:
-                del st.session_state.filtered_articles
-            if 'search_query' in st.session_state:
-                del st.session_state.search_query
-            if 'search_results_count' in st.session_state:
-                del st.session_state.search_results_count
-            if 'years_input' in st.session_state:
-                del st.session_state.years_input
+            for k in ['selected_topics', 'selected_topic_ids', 'selected_topic',
+                      'selected_topic_id', 'selected_years', 'all_works',
+                      'enriched_count', 'html_cache', 'all_reports_generated',
+                      'filtered_articles', 'search_query', 'search_results_count',
+                      'years_input']:
+                st.session_state.pop(k, None)
             st.rerun()
-    
+
     topics = st.session_state.topic_counter.most_common()
-    
-    cols = st.columns(2)
-    for idx, (topic, count) in enumerate(topics[:10]):
-        with cols[idx % 2]:
-            is_selected = st.session_state.get('selected_topic') == topic
-            st.markdown(f"""
-            <div class="topic-card" style="background: white; border-radius: 8px; padding: 12px; margin-bottom: 8px; border: 1px solid {'#667eea' if is_selected else '#e0e0e0'}; cursor: pointer; transition: all 0.2s ease;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div style="font-weight: 600; font-size: 0.9rem;">{topic[:70]}{'...' if len(topic) > 70 else ''}</div>
-                    <span style="background: #667eea; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem;">
-                        {count} papers
-                    </span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if st.button(f"Select", key=f"select_{idx}", 
-                        use_container_width=True,
-                        type="primary" if is_selected else "secondary"):
-                # Clear previous topic data when selecting new topic
-                if 'selected_topic' in st.session_state and st.session_state.selected_topic != topic:
-                    if 'selected_topic_id' in st.session_state:
-                        del st.session_state.selected_topic_id
-                    if 'selected_years' in st.session_state:
-                        del st.session_state.selected_years
-                    if 'all_works' in st.session_state:
-                        del st.session_state.all_works
-                    if 'enriched_count' in st.session_state:
-                        del st.session_state.enriched_count
-                    if 'html_cache' in st.session_state:
-                        del st.session_state.html_cache
-                    if 'all_reports_generated' in st.session_state:
-                        del st.session_state.all_reports_generated
-                    if 'filtered_articles' in st.session_state:
-                        del st.session_state.filtered_articles
-                    if 'search_query' in st.session_state:
-                        del st.session_state.search_query
-                    if 'search_results_count' in st.session_state:
-                        del st.session_state.search_results_count
-                    if 'years_input' in st.session_state:
-                        del st.session_state.years_input
-                
-                st.session_state.selected_topic = topic
-                
+    # Ограничим список разумным числом для отображения
+    topics = topics[:30]
+
+    # Формируем опции вида "Название (N papers)"
+    option_labels = [f"{t} ({c} papers)" for t, c in topics]
+    label_to_topic = {label: t for label, (t, c) in zip(option_labels, topics)}
+
+    # Восстанавливаем ранее выбранные (если есть)
+    prev_topics = st.session_state.get('selected_topics', [])
+    default_labels = [f"{t} ({c} papers)" for t, c in topics if t in prev_topics]
+
+    selected_labels = st.multiselect(
+        "Select up to 3 topics:",
+        options=option_labels,
+        default=default_labels,
+        max_selections=3,
+        help="You can choose 1, 2 or 3 topics. Articles from all selected topics will be combined."
+    )
+
+    selected_topics = [label_to_topic[l] for l in selected_labels]
+
+    if selected_topics:
+        st.markdown(f"""
+        <div style="background: #e8f5e9; border-radius: 8px; padding: 12px;
+                    border-left: 4px solid #4CAF50; margin: 10px 0;">
+            <strong>✅ Selected topics ({len(selected_topics)}):</strong>
+            <ul style="margin: 6px 0 0 18px;">
+                {''.join(f'<li>{t}</li>' for t in selected_topics)}
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("⏰ Select Years", type="primary", use_container_width=True):
+            if not selected_topics:
+                st.error("❌ Please select at least one topic.")
+                return
+
+            # Собираем ID для всех выбранных тем
+            selected_topic_ids = []
+            for topic in selected_topics:
                 for work in st.session_state.works_data:
                     if work.get('primary_topic') == topic:
-                        topic_id = work.get('topic_id')
-                        if topic_id:
-                            st.session_state.selected_topic_id = topic_id
-                            break
-                
-                st.rerun()
-    
-    if 'selected_topic' in st.session_state and 'selected_topic_id' in st.session_state:
-        st.markdown("---")
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.button("⏰ Select Years", type="primary", use_container_width=True):
-                st.session_state.current_step = 4
-                st.rerun()
+                        tid = work.get('topic_id')
+                        if tid and tid not in selected_topic_ids:
+                            selected_topic_ids.append(tid)
+
+            if not selected_topic_ids:
+                st.error("❌ Could not resolve topic IDs. Try different topics.")
+                return
+
+            # Сбрасываем всё, что зависит от прошлого выбора
+            for k in ['selected_years', 'all_works', 'enriched_count',
+                      'html_cache', 'all_reports_generated',
+                      'filtered_articles', 'search_query',
+                      'search_results_count', 'years_input']:
+                st.session_state.pop(k, None)
+
+            st.session_state.selected_topics = selected_topics
+            st.session_state.selected_topic_ids = selected_topic_ids
+            # Совместимость: оставим "главную" тему для отображения
+            st.session_state.selected_topic = " + ".join(selected_topics)
+            st.session_state.current_step = 4
+            st.rerun()
 
 def step_year_selection():
     """Step 4: Select publication years - free text input"""
@@ -5389,7 +5378,7 @@ def step_year_selection():
     </div>
     """, unsafe_allow_html=True)
     
-    if 'selected_topic_id' not in st.session_state:
+    if 'selected_topic_ids' not in st.session_state or not st.session_state.selected_topic_ids:
         st.error("❌ Topic not selected. Please go back to Step 3.")
         return
     
@@ -5419,7 +5408,7 @@ def step_year_selection():
                 del st.session_state.years_input
             st.rerun()
     
-    topic_id = st.session_state.selected_topic_id
+    topic_ids = st.session_state.selected_topic_ids
     topic_name = st.session_state.get('selected_topic', 'Selected Topic')
     
     st.markdown(f"""
@@ -5525,7 +5514,7 @@ def step_results():
     </div>
     """, unsafe_allow_html=True)
     
-    if 'selected_topic_id' not in st.session_state:
+    if 'selected_topic_ids' not in st.session_state or not st.session_state.selected_topic_ids:
         st.error("❌ Topic not selected. Please go back.")
         return
     
@@ -5537,7 +5526,7 @@ def step_results():
             # Keep years but allow changes
             st.rerun()
     
-    topic_id = st.session_state.selected_topic_id
+    topic_ids = st.session_state.selected_topic_ids
     topic_name = st.session_state.get('selected_topic', 'Selected Topic')
     years = st.session_state.get('selected_years', [])
     
@@ -5547,11 +5536,22 @@ def step_results():
     
     # Fetch ALL works for the topic with given years (no citation filtering)
     if 'all_works' not in st.session_state:
-        with st.spinner(f"Loading ALL works for topic '{topic_name}'..."):
-            all_works = fetch_all_works_by_topic_sync(topic_id, years)
-            
+        with st.spinner(f"Loading ALL works for {len(topic_ids)} topic(s): {topic_name}..."):
+            combined = []
+            seen_dois = set()
+            for tid in topic_ids:
+                works = fetch_all_works_by_topic_sync(tid, years) or []
+                for w in works:
+                    doi = (w.get('doi') or '').lower()
+                    key = doi if doi else w.get('id', '')  # fallback на OpenAlex ID
+                    if key in seen_dois:
+                        continue
+                    seen_dois.add(key)
+                    combined.append(w)
+            all_works = combined
+    
             if not all_works:
-                st.error("❌ No works found for this topic and year range.")
+                st.error("❌ No works found for the selected topics and year range.")
                 return
             
             enriched_works = []
@@ -5711,10 +5711,11 @@ def step_results():
     filter_hash = hashlib.md5(str(sorted([a.get('doi', '') for a in current_articles])).encode()).hexdigest()[:8]
     years_hash = hashlib.md5(','.join(map(str, years)).encode()).hexdigest()[:8]
     
-    cache_key_publisher = f"html_publisher_{topic_id}_{years_hash}_{filter_hash}_{sort_publisher_param}"
-    cache_key_citations = f"html_citations_{topic_id}_{years_hash}_{filter_hash}_{sort_citations_param}"
-    cache_key_country = f"html_country_{topic_id}_{years_hash}_{filter_hash}_{sort_country_param}"
-    cache_key_funder = f"html_funder_{topic_id}_{years_hash}_{filter_hash}_{sort_funder_param}"
+    topic_key = "_".join(sorted(topic_ids))
+    cache_key_publisher = f"html_publisher_{topic_key}_{years_hash}_{filter_hash}_{sort_publisher_param}"
+    cache_key_citations = f"html_citations_{topic_key}_{years_hash}_{filter_hash}_{sort_citations_param}"
+    cache_key_country = f"html_country_{topic_key}_{years_hash}_{filter_hash}_{sort_country_param}"
+    cache_key_funder = f"html_funder_{topic_key}_{years_hash}_{filter_hash}_{sort_funder_param}"
     
     # Advanced Search button
     col_adv1, col_adv2, col_adv3 = st.columns([1, 2, 1])
