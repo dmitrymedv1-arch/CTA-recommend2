@@ -751,46 +751,50 @@ class OpenAlexAsyncClient:
     async def fetch_all_works_by_topic(self, topic_id: str, years: List[int], 
                                        progress_callback=None) -> List[dict]:
         """
-        Fetch ALL works for a specific topic and years without citation filtering.
-        Uses cursor pagination to get all available works.
+        Fetch ALL works for a specific topic and years using page-based pagination.
+        This works without an API key up to 10,000 results.
         """
         all_works = []
-        cursor = "*"
-        page_count = 0
+        page = 1
+        per_page = 100  # OpenAlex official maximum
         total_count = 0
         
         # Build filter string: topic + years
         years_str = "|".join(map(str, years))
         filter_str = f"topics.id:{topic_id},publication_year:{years_str}"
         
-        logger.info(f"Fetching ALL works for topic {topic_id}, years {years}")
+        logger.info(f"Fetching ALL works for topic {topic_id}, years {years} (page-based)")
         
         try:
             while True:
-                page_count += 1
-                
                 params = {
                     "filter": filter_str,
-                    "per-page": CURSOR_PAGE_SIZE,
-                    "cursor": cursor,
-                    "mailto": MAILTO
+                    "per-page": per_page,
+                    "page": page,
+                    "mailto": MAILTO  # Still polite to include, though retired
                 }
                 
                 url = f"{OPENALEX_BASE_URL}/works"
                 response = requests.get(url, params=params, headers=POLITE_POOL_HEADER, timeout=60)
                 
                 if response.status_code != 200:
-                    logger.error(f"Error fetching works: {response.status_code}")
+                    logger.error(f"Error fetching works page {page}: {response.status_code} - {response.text}")
                     break
                 
                 data = response.json()
                 
-                if page_count == 1:
+                # Get total count on first page
+                if page == 1:
                     total_count = data.get('meta', {}).get('count', 0)
                     logger.info(f"Total works found: {total_count}")
                     
                     if total_count == 0:
                         return []
+                    
+                    # Warn if we might hit the 10,000 limit
+                    if total_count > 10000:
+                        logger.warning(f"Total count {total_count} exceeds 10,000. "
+                                       f"Only the first 10,000 will be fetched without an API key.")
                 
                 works = data.get('results', [])
                 if not works:
@@ -800,18 +804,18 @@ class OpenAlexAsyncClient:
                 
                 if progress_callback and total_count > 0:
                     progress = min(len(all_works) / total_count, 1.0)
-                    progress_callback(progress, len(all_works), page_count, total_count)
+                    progress_callback(progress, len(all_works), page, total_count)
                 
-                logger.info(f"Page {page_count}: got {len(works)} works, total: {len(all_works)}/{total_count}")
+                logger.info(f"Page {page}: got {len(works)} works, total: {len(all_works)}/{total_count}")
                 
-                next_cursor = data.get('meta', {}).get('next_cursor')
-                if not next_cursor:
+                # Check if we've fetched everything or hit the 10,000 limit
+                if len(all_works) >= total_count or len(all_works) >= 10000:
                     break
                 
-                cursor = next_cursor
-                time.sleep(0.1)
+                page += 1
+                time.sleep(0.1)  # Be polite
             
-            logger.info(f"Finished fetching. Total works: {len(all_works)}")
+            logger.info(f"Finished fetching. Total works retrieved: {len(all_works)}")
             return all_works
             
         except Exception as e:
