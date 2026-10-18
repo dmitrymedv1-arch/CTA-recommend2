@@ -352,11 +352,20 @@ st.markdown("""
 
 OPENALEX_BASE_URL = "https://api.openalex.org"
 MAILTO = "your-email@example.com"
+
+try:
+    OPENALEX_API_KEY = st.secrets.get("OPENALEX_API_KEY", "")
+except Exception:
+    OPENALEX_API_KEY = ""
+
 POLITE_POOL_HEADER = {'User-Agent': f'CTA-App (mailto:{MAILTO})'}
+
+if OPENALEX_API_KEY:
+    POLITE_POOL_HEADER['Authorization'] = f'Bearer {OPENALEX_API_KEY}'
 
 RATE_LIMIT_PER_SECOND = 8
 BATCH_SIZE = 50
-CURSOR_PAGE_SIZE = 200
+PAGE_SIZE = 100
 MAX_WORKERS_ASYNC = 3
 MAX_RETRIES = 3
 INITIAL_DELAY = 1
