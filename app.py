@@ -31,6 +31,20 @@ import html
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Logo loading (base64 for embedding in HTML reports)
+def load_logo_base64(path: str = "logo.png") -> str:
+    """Load logo from disk and return base64-encoded string, or '' if not found."""
+    try:
+        if os.path.exists(path):
+            import base64
+            with open(path, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+    except Exception as e:
+        logger.warning(f"Could not load logo '{path}': {e}")
+    return ""
+
+APP_LOGO_BASE64 = load_logo_base64("logo.png")
+
 # App settings
 st.set_page_config(
     page_title="CTA Article Recommender Pro*2",
@@ -2020,7 +2034,8 @@ def _js_filter_common_script() -> str:
 
 def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, years: List[int],
                                        hierarchy: Dict, report_title: str = "Report by Publisher & Journal",
-                                       sort_option: str = 'alphabetical') -> str:
+                                       sort_option: str = 'alphabetical',
+                                       app_logo_base64: str = '') -> str:
     """Generate HTML report grouping articles by Publisher -> Journal with hierarchical expandable lists."""
     
     # Get filter info from session_state
@@ -2667,6 +2682,7 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
 </head>
 <body>
     <div class="sidebar">
+        {f'<div style="text-align:center; margin-bottom:14px;"><img src="data:image/png;base64,{app_logo_base64}" alt="App Logo" style="max-height:105px;"></div>' if app_logo_base64 else ''}
         <h3>{escape_html(journal_abbr)}</h3>
         {''.join(nav_items)}
         <div class="sidebar-footer">
@@ -2852,7 +2868,8 @@ def generate_html_by_publisher_journal(journal_name: str, journal_abbr: str, yea
 
 def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List[int],
                                articles: List[dict], report_title: str = "Report by Citations",
-                               sort_option: str = 'citations_per_year') -> str:
+                               sort_option: str = 'citations_per_year',
+                               app_logo_base64: str = '') -> str:
     """Generate HTML report with articles sorted by citations."""
     
     # Get filter info from session_state
@@ -3360,6 +3377,7 @@ def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List
 </head>
 <body>
     <div class="sidebar">
+        {f'<div style="text-align:center; margin-bottom:14px;"><img src="data:image/png;base64,{app_logo_base64}" alt="App Logo" style="max-height:105px;"></div>' if app_logo_base64 else ''}
         <h3>{escape_html(journal_abbr)}</h3>
         {''.join(nav_items)}
         <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 10px; opacity: 0.7; line-height: 1.5;">
@@ -3473,7 +3491,8 @@ def generate_html_by_citations(journal_name: str, journal_abbr: str, years: List
 
 def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, years: List[int],
                                         hierarchy: Dict, report_title: str = "Report by Country & Affiliation",
-                                        sort_option: str = 'alphabetical') -> str:
+                                        sort_option: str = 'alphabetical',
+                                        app_logo_base64: str = '') -> str:
     """Generate HTML report grouping articles by Country -> Affiliation with hierarchical expandable lists."""
     
     # Get filter info from session_state
@@ -4109,6 +4128,7 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
 </head>
 <body>
     <div class="sidebar">
+        {f'<div style="text-align:center; margin-bottom:14px;"><img src="data:image/png;base64,{app_logo_base64}" alt="App Logo" style="max-height:105px;"></div>' if app_logo_base64 else ''}
         <h3>{escape_html(journal_abbr)}</h3>
         {''.join(nav_items)}
         <div class="sidebar-footer">
@@ -4301,7 +4321,8 @@ def generate_html_by_country_affiliation(journal_name: str, journal_abbr: str, y
 def generate_html_by_funder_award(journal_name: str, journal_abbr: str, years: List[int],
                                   hierarchy: Dict, report_title: str = "Report by Funder & Award",
                                   sort_funder: str = 'alphabetical',
-                                  sort_award: str = 'alphabetical') -> str:
+                                  sort_award: str = 'alphabetical',
+                                  app_logo_base64: str = '') -> str:
     """Generate HTML report grouping articles by Funder -> Award ID with hierarchical expandable lists."""
     
     # Get filter info from session_state
@@ -4932,6 +4953,7 @@ def generate_html_by_funder_award(journal_name: str, journal_abbr: str, years: L
 </head>
 <body>
     <div class="sidebar">
+        {f'<div style="text-align:center; margin-bottom:14px;"><img src="data:image/png;base64,{app_logo_base64}" alt="App Logo" style="max-height:105px;"></div>' if app_logo_base64 else ''}
         <h3>{escape_html(journal_abbr)}</h3>
         {''.join(nav_items)}
         <div class="sidebar-footer">
@@ -5712,10 +5734,11 @@ def step_results():
     years_hash = hashlib.md5(','.join(map(str, years)).encode()).hexdigest()[:8]
     
     topic_key = "_".join(sorted(topic_ids))
-    cache_key_publisher = f"html_publisher_{topic_key}_{years_hash}_{filter_hash}_{sort_publisher_param}"
-    cache_key_citations = f"html_citations_{topic_key}_{years_hash}_{filter_hash}_{sort_citations_param}"
-    cache_key_country = f"html_country_{topic_key}_{years_hash}_{filter_hash}_{sort_country_param}"
-    cache_key_funder = f"html_funder_{topic_key}_{years_hash}_{filter_hash}_{sort_funder_param}"
+    logo_hash = hashlib.md5(APP_LOGO_BASE64.encode() if APP_LOGO_BASE64 else b"no_logo").hexdigest()[:6]
+    cache_key_publisher = f"html_publisher_{topic_key}_{years_hash}_{filter_hash}_{sort_publisher_param}_{logo_hash}"
+    cache_key_citations = f"html_citations_{topic_key}_{years_hash}_{filter_hash}_{sort_citations_param}_{logo_hash}"
+    cache_key_country = f"html_country_{topic_key}_{years_hash}_{filter_hash}_{sort_country_param}_{logo_hash}"
+    cache_key_funder = f"html_funder_{topic_key}_{years_hash}_{filter_hash}_{sort_funder_param}_{logo_hash}"
     
     # Advanced Search button
     col_adv1, col_adv2, col_adv3 = st.columns([1, 2, 1])
@@ -5740,7 +5763,8 @@ def step_results():
                             journal_name, journal_abbr, years,
                             publisher_hierarchy,
                             "Report by Publisher & Journal",
-                            sort_publisher_param
+                            sort_publisher_param,
+                            app_logo_base64=APP_LOGO_BASE64
                         )
                     progress_bar.progress(0.25)
                     
@@ -5750,7 +5774,8 @@ def step_results():
                             journal_name, journal_abbr, years,
                             citations_sorted,
                             "Report by Citations",
-                            sort_citations_param
+                            sort_citations_param,
+                            app_logo_base64=APP_LOGO_BASE64
                         )
                     progress_bar.progress(0.5)
                     
@@ -5760,7 +5785,8 @@ def step_results():
                             journal_name, journal_abbr, years,
                             country_hierarchy,
                             "Report by Country & Affiliation",
-                            sort_country_param
+                            sort_country_param,
+                            app_logo_base64=APP_LOGO_BASE64
                         )
                     progress_bar.progress(0.75)
                     
@@ -5771,7 +5797,8 @@ def step_results():
                             funder_hierarchy,
                             "Report by Funder & Award",
                             sort_funder_param,
-                            sort_funder_param
+                            sort_funder_param,
+                            app_logo_base64=APP_LOGO_BASE64
                         )
                     progress_bar.progress(1.0)
                     
@@ -5812,7 +5839,8 @@ def step_results():
                         journal_name, journal_abbr, years,
                         publisher_hierarchy,
                         "Report by Publisher & Journal",
-                        sort_publisher_param
+                        sort_publisher_param,
+                        app_logo_base64=APP_LOGO_BASE64
                     )
                     st.session_state.html_cache[cache_key_publisher] = html_data
                     st.rerun()
@@ -5843,7 +5871,8 @@ def step_results():
                         journal_name, journal_abbr, years,
                         citations_sorted,
                         "Report by Citations",
-                        sort_citations_param
+                        sort_citations_param,
+                        app_logo_base64=APP_LOGO_BASE64
                     )
                     st.session_state.html_cache[cache_key_citations] = html_data
                     st.rerun()
@@ -5874,7 +5903,8 @@ def step_results():
                         journal_name, journal_abbr, years,
                         country_hierarchy,
                         "Report by Country & Affiliation",
-                        sort_country_param
+                        sort_country_param,
+                        app_logo_base64=APP_LOGO_BASE64
                     )
                     st.session_state.html_cache[cache_key_country] = html_data
                     st.rerun()
@@ -5906,7 +5936,8 @@ def step_results():
                         funder_hierarchy,
                         "Report by Funder & Award",
                         sort_funder_param,
-                        sort_funder_param
+                        sort_funder_param,
+                        app_logo_base64=APP_LOGO_BASE64
                     )
                     st.session_state.html_cache[cache_key_funder] = html_data
                     st.rerun()
